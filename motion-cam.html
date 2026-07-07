@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Motion Cam</title>
+<style>
+  :root{
+    --bg:#000;
+    --panel:#0a0a0a;
+    --line:#1c1c1c;
+    --text:#e8e8e8;
+    --dim:#6b6b6b;
+    --rec:#e0332f;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    overscroll-behavior:none;
+  }
+  body{
+    display:flex; flex-direction:column;
+    height:100dvh; width:100vw; overflow:hidden;
+  }
+
+  .stage{
+    position:relative;
+    flex:1;
+    display:flex; align-items:center; justify-content:center;
+    background:#000;
+    overflow:hidden;
+  }
+  canvas#view{
+    width:100%; height:100%;
+    object-fit:cover;
+    display:block;
+  }
+
+  .status{
+    position:absolute;
+    top:calc(env(safe-area-inset-top, 0px) + 14px);
+    left:0; right:0;
+    display:flex; justify-content:center;
+    pointer-events:none;
+  }
+  .status .pill{
+    display:flex; align-items:center; gap:8px;
+    background:rgba(0,0,0,0.55);
+    border:1px solid var(--line);
+    padding:6px 14px;
+    border-radius:999px;
+    font-size:13px; letter-spacing:0.02em;
+    color:var(--dim);
+  }
+  .status .dot{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--dim);
+    transition:background .15s ease;
+  }
+  .status.recording .dot{
+    background:var(--rec);
+    animation:blink 1s step-start infinite;
+  }
+  .status.recording .pill{ color:var(--text); }
+  @keyframes blink{ 50%{ opacity:0.25; } }
+
+  .overlay-msg{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:32px;
+    color:var(--dim); font-size:15px; line-height:1.5;
+  }
+
+  .controls{
+    flex-shrink:0;
+    background:var(--panel);
+    border-top:1px solid var(--line);
+    padding:18px 22px calc(18px + env(safe-area-inset-bottom, 0px));
+    display:flex; flex-direction:column; gap:14px;
+  }
+
+  .sliders{ display:flex; flex-direction:column; gap:12px; }
+  .slider-row{ display:flex; align-items:center; gap:12px; }
+  .slider-row label{
+    font-size:12px; color:var(--dim);
+    width:64px; flex-shrink:0;
+    text-transform:uppercase; letter-spacing:0.06em;
+  }
+  input[type="range"]{
+    flex:1;
+    -webkit-appearance:none;
+    height:2px;
+    background:var(--line);
+    border-radius:2px;
+    outline:none;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:18px; height:18px;
+    border-radius:50%;
+    background:var(--text);
+    cursor:pointer;
+  }
+
+  .bottom-row{
+    display:flex; align-items:center; justify-content:center;
+    gap:24px;
+    padding-top:4px;
+  }
+
+  #recordBtn{
+    width:74px; height:74px;
+    border-radius:50%;
+    border:3px solid var(--text);
+    background:transparent;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+  }
+  #recordBtn .inner{
+    width:56px; height:56px;
+    border-radius:50%;
+    background:var(--rec);
+    transition:all .18s ease;
+  }
+  #recordBtn.recording .inner{
+    width:26px; height:26px;
+    border-radius:6px;
+  }
+
+  #saveLink{
+    font-size:13px;
+    color:var(--text);
+    text-decoration:none;
+    border:1px solid var(--line);
+    padding:10px 16px;
+    border-radius:999px;
+    display:none;
+  }
+  #saveLink.show{ display:inline-block; }
+</style>
+</head>
+<body>
+
+  <div class="stage" id="stage">
+    <canvas id="view"></canvas>
+    <div class="status" id="status">
+      <div class="pill"><span class="dot"></span><span id="statusText">starting camera…</span></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="sliders">
+      <div class="slider-row">
+        <label>Sensitivity</label>
+        <input type="range" id="sensitivity" min="1" max="30" value="8">
+      </div>
+      <div class="slider-row">
+        <label>Trail</label>
+        <input type="range" id="trail" min="0" max="95" value="80">
+      </div>
+    </div>
+    <div class="bottom-row">
+      <button id="recordBtn"><div class="inner"></div></button>
+      <a id="saveLink" download="motion.mp4">Save last clip</a>
+    </div>
+  </div>
+
+<video id="cam" playsinline autoplay muted style="display:none"></video>
+
+<script>
+(() => {
+  const video = document.getElementById('cam');
+  const canvas = document.getElementById('view');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const stage = document.getElementById('stage');
+  const statusEl = document.getElementById('status');
+  const statusText = document.getElementById('statusText');
+  const recordBtn = document.getElementById('recordBtn');
+  const saveLink = document.getElementById('saveLink');
+  const sensitivitySlider = document.getElementById('sensitivity');
+  const trailSlider = document.getElementById('trail');
+
+  // Processing runs at a fixed internal resolution for consistent
+  // performance across phones, independent of the display size.
+  const PROC_W = 480;
+  const PROC_H = 640;
+
+  const proc = document.createElement('canvas');
+  proc.width = PROC_W;
+  proc.height = PROC_H;
+  const pctx = proc.getContext('2d', { willReadFrequently: true });
+
+  canvas.width = PROC_W;
+  canvas.height = PROC_H;
+
+  let prevGray = null;
+  let accumulator = null;
+  let noiseThreshold = parseFloat(sensitivitySlider.value);
+  let decay = parseFloat(trailSlider.value) / 100;
+  const GAIN = 4.0;
+
+  sensitivitySlider.addEventListener('input', () => {
+    noiseThreshold = parseFloat(sensitivitySlider.value);
+  });
+  trailSlider.addEventListener('input', () => {
+    decay = parseFloat(trailSlider.value) / 100;
+  });
+
+  function setStatus(text, recording) {
+    statusText.textContent = text;
+    statusEl.classList.toggle('recording', !!recording);
+  }
+
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 720 },
+          height: { ideal: 1280 }
+        },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      setStatus('live');
+      requestAnimationFrame(loop);
+    } catch (err) {
+      setStatus('camera blocked');
+      const msg = document.createElement('div');
+      msg.className = 'overlay-msg';
+      msg.textContent = 'Could not access the camera. Check Safari settings > Camera for this site, then reload.';
+      stage.appendChild(msg);
+      console.error(err);
+    }
+  }
+
+  // Simple 3x3 box blur over a grayscale buffer to smooth sensor noise,
+  // matching the GaussianBlur step in the original script.
+  function boxBlur(src, w, h) {
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const y0 = Math.max(0, y - 1), y1 = Math.min(h - 1, y + 1);
+      for (let x = 0; x < w; x++) {
+        const x0 = Math.max(0, x - 1), x1 = Math.min(w - 1, x + 1);
+        let sum = 0, count = 0;
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0; xx <= x1; xx++) {
+            sum += src[yy * w + xx];
+            count++;
+          }
+        }
+        out[y * w + x] = sum / count;
+      }
+    }
+    return out;
+  }
+
+  function loop() {
+    if (video.readyState >= 2) {
+      // Draw the current frame, cropped/cover-fit into the processing canvas.
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const targetRatio = PROC_W / PROC_H;
+      const srcRatio = vw / vh;
+      let sx, sy, sw, sh;
+      if (srcRatio > targetRatio) {
+        sh = vh; sw = vh * targetRatio; sx = (vw - sw) / 2; sy = 0;
+      } else {
+        sw = vw; sh = vw / targetRatio; sx = 0; sy = (vh - sh) / 2;
+      }
+      pctx.drawImage(video, sx, sy, sw, sh, 0, 0, PROC_W, PROC_H);
+
+      const frame = pctx.getImageData(0, 0, PROC_W, PROC_H);
+      const data = frame.data;
+      const n = PROC_W * PROC_H;
+
+      let gray = new Float32Array(n);
+      for (let i = 0, p = 0; i < n; i++, p += 4) {
+        // standard luma weights
+        gray[i] = 0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2];
+      }
+      gray = boxBlur(gray, PROC_W, PROC_H);
+
+      if (!prevGray) {
+        prevGray = gray;
+        accumulator = new Float32Array(n);
+      }
+
+      const out = ctx.getImageData(0, 0, PROC_W, PROC_H);
+      const od = out.data;
+
+      for (let i = 0; i < n; i++) {
+        let diff = Math.abs(gray[i] - prevGray[i]);
+        if (diff < noiseThreshold) diff = 0;
+        diff *= GAIN;
+
+        accumulator[i] = accumulator[i] * decay;
+        if (diff > accumulator[i]) accumulator[i] = diff;
+        if (accumulator[i] > 255) accumulator[i] = 255;
+
+        const v = accumulator[i] | 0;
+        const p = i * 4;
+        od[p] = v; od[p + 1] = v; od[p + 2] = v; od[p + 3] = 255;
+      }
+
+      ctx.putImageData(out, 0, 0);
+      prevGray = gray;
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // --- Recording ---------------------------------------------------------
+  let recorder = null;
+  let chunks = [];
+  let recording = false;
+
+  function pickMimeType() {
+    const candidates = [
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm'
+    ];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return '';
+  }
+
+  function startRecording() {
+    const stream = canvas.captureStream(30);
+    const mimeType = pickMimeType();
+    try {
+      recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    } catch (e) {
+      alert('Recording is not supported in this browser.');
+      console.error(e);
+      return;
+    }
+    chunks = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const ext = (recorder.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+      saveLink.href = url;
+      saveLink.download = `motion-${Date.now()}.${ext}`;
+      saveLink.classList.add('show');
+    };
+    recorder.start();
+    recording = true;
+    recordBtn.classList.add('recording');
+    setStatus('recording', true);
+    saveLink.classList.remove('show');
+  }
+
+  function stopRecording() {
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    recording = false;
+    recordBtn.classList.remove('recording');
+    setStatus('live');
+  }
+
+  recordBtn.addEventListener('click', () => {
+    if (!recording) startRecording();
+    else stopRecording();
+  });
+
+  startCamera();
+})();
+</script>
+</body>
+</html>
