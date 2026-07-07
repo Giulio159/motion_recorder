@@ -129,6 +129,18 @@
     border-radius:6px;
   }
 
+  .side-btn{
+    width:46px; height:46px;
+    border-radius:50%;
+    border:1px solid var(--line);
+    background:transparent;
+    color:var(--text);
+    font-size:20px;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+  }
+  .side-btn:disabled{ opacity:0.35; }
+
   #saveLink{
     font-size:13px;
     color:var(--text);
@@ -162,6 +174,7 @@
       </div>
     </div>
     <div class="bottom-row">
+      <button id="flipBtn" class="side-btn" aria-label="Flip camera">⟲</button>
       <button id="recordBtn"><div class="inner"></div></button>
       <a id="saveLink" download="motion.mp4">Save last clip</a>
     </div>
@@ -178,6 +191,7 @@
   const statusEl = document.getElementById('status');
   const statusText = document.getElementById('statusText');
   const recordBtn = document.getElementById('recordBtn');
+  const flipBtn = document.getElementById('flipBtn');
   const saveLink = document.getElementById('saveLink');
   const sensitivitySlider = document.getElementById('sensitivity');
   const trailSlider = document.getElementById('trail');
@@ -213,20 +227,44 @@
     statusEl.classList.toggle('recording', !!recording);
   }
 
-  async function startCamera() {
+  let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
+  let currentStream = null;
+  let loopStarted = false;
+
+  function stopCurrentStream() {
+    if (currentStream) {
+      currentStream.getTracks().forEach(t => t.stop());
+      currentStream = null;
+    }
+  }
+
+  async function startCamera(facingMode = currentFacingMode) {
+    // Don't flip while recording — stopping the track mid-recording would cut the clip.
+    if (recording) return;
+
+    flipBtn.disabled = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: facingMode },
           width: { ideal: 720 },
           height: { ideal: 1280 }
         },
         audio: false
       });
+      stopCurrentStream();
+      currentStream = stream;
+      currentFacingMode = facingMode;
       video.srcObject = stream;
       await video.play();
+      // Mirror the preview for the front camera so it feels natural, like a mirror.
+      canvas.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
       setStatus('live');
-      requestAnimationFrame(loop);
+      prevGray = null; // reset motion baseline so the switch doesn't read as one giant motion event
+      if (!loopStarted) {
+        loopStarted = true;
+        requestAnimationFrame(loop);
+      }
     } catch (err) {
       setStatus('camera blocked');
       const msg = document.createElement('div');
@@ -234,8 +272,15 @@
       msg.textContent = 'Could not access the camera. Check Safari settings > Camera for this site, then reload.';
       stage.appendChild(msg);
       console.error(err);
+    } finally {
+      flipBtn.disabled = false;
     }
   }
+
+  flipBtn.addEventListener('click', () => {
+    const next = currentFacingMode === 'environment' ? 'user' : 'environment';
+    startCamera(next);
+  });
 
   // Simple 3x3 box blur over a grayscale buffer to smooth sensor noise,
   // matching the GaussianBlur step in the original script.
