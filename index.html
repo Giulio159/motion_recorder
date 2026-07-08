@@ -53,11 +53,13 @@
     border-radius:999px;
     font-size:13px; letter-spacing:0.02em;
     color:var(--dim);
+    transition:padding .15s ease, font-size .15s ease;
   }
   .status .dot{
     width:8px; height:8px; border-radius:50%;
     background:var(--dim);
     transition:background .15s ease;
+    flex-shrink:0;
   }
   .status.recording .dot{
     background:var(--rec);
@@ -66,11 +68,42 @@
   .status.recording .pill{ color:var(--text); }
   @keyframes blink{ 50%{ opacity:0.25; } }
 
+  /* HUD compact toggle button, floats top-right of the stage */
+  .hud-toggle{
+    position:absolute;
+    top:calc(env(safe-area-inset-top, 0px) + 10px);
+    right:14px;
+    width:34px; height:34px;
+    border-radius:50%;
+    border:1px solid var(--line);
+    background:rgba(0,0,0,0.55);
+    color:var(--text);
+    font-size:15px;
+    display:flex; align-items:center; justify-content:center;
+    padding:0;
+    pointer-events:auto;
+  }
+
   .overlay-msg{
     position:absolute; inset:0;
     display:flex; align-items:center; justify-content:center;
     text-align:center; padding:32px;
     color:var(--dim); font-size:15px; line-height:1.5;
+  }
+
+  /* Brief white flash shown when a photo is captured */
+  .flash{
+    position:absolute; inset:0;
+    background:#fff;
+    opacity:0;
+    pointer-events:none;
+  }
+  .flash.fire{
+    animation:flash-anim .25s ease-out;
+  }
+  @keyframes flash-anim{
+    0%{ opacity:0.85; }
+    100%{ opacity:0; }
   }
 
   .controls{
@@ -79,9 +112,10 @@
     border-top:1px solid var(--line);
     padding:18px 22px calc(18px + env(safe-area-inset-bottom, 0px));
     display:flex; flex-direction:column; gap:14px;
+    transition:padding .18s ease, gap .18s ease;
   }
 
-  .sliders{ display:flex; flex-direction:column; gap:12px; }
+  .sliders{ display:flex; flex-direction:column; gap:12px; overflow:hidden; transition:max-height .18s ease, opacity .18s ease; max-height:200px; opacity:1; }
   .slider-row{ display:flex; align-items:center; gap:12px; }
   .slider-row label{
     font-size:12px; color:var(--dim);
@@ -106,8 +140,9 @@
 
   .bottom-row{
     display:flex; align-items:center; justify-content:center;
-    gap:24px;
+    gap:20px;
     padding-top:4px;
+    transition:padding .18s ease, gap .18s ease;
   }
 
   #recordBtn{
@@ -117,6 +152,8 @@
     background:transparent;
     display:flex; align-items:center; justify-content:center;
     padding:0;
+    flex-shrink:0;
+    transition:width .18s ease, height .18s ease;
   }
   #recordBtn .inner{
     width:56px; height:56px;
@@ -138,10 +175,14 @@
     font-size:20px;
     display:flex; align-items:center; justify-content:center;
     padding:0;
+    flex-shrink:0;
+    transition:width .18s ease, height .18s ease, font-size .18s ease;
   }
   .side-btn:disabled{ opacity:0.35; }
 
-  #saveLink{
+  #photoBtn{ font-size:22px; }
+
+  #saveLink, #savePhotoLink{
     font-size:13px;
     color:var(--text);
     text-decoration:none;
@@ -150,16 +191,41 @@
     border-radius:999px;
     display:none;
   }
-  #saveLink.show{ display:inline-block; }
+  #saveLink.show, #savePhotoLink.show{ display:inline-block; }
+
+  /* ---- Minimal HUD mode: shrink everything that eats vertical space ---- */
+  body.compact .controls{
+    padding:8px 14px calc(8px + env(safe-area-inset-bottom, 0px));
+    gap:0;
+  }
+  body.compact .sliders{
+    max-height:0;
+    opacity:0;
+    margin:0;
+  }
+  body.compact .bottom-row{
+    padding-top:0;
+    gap:14px;
+  }
+  body.compact #recordBtn{ width:52px; height:52px; border-width:2px; }
+  body.compact #recordBtn .inner{ width:38px; height:38px; }
+  body.compact #recordBtn.recording .inner{ width:18px; height:18px; border-radius:4px; }
+  body.compact .side-btn{ width:34px; height:34px; font-size:15px; }
+  body.compact #photoBtn{ font-size:16px; }
+  body.compact .status .pill{ padding:3px 9px; font-size:0; gap:0; }
+  body.compact .status .dot{ width:7px; height:7px; }
+  body.compact #saveLink, body.compact #savePhotoLink{ padding:6px 10px; font-size:11px; }
 </style>
 </head>
 <body>
 
   <div class="stage" id="stage">
     <canvas id="view"></canvas>
+    <div class="flash" id="flash"></div>
     <div class="status" id="status">
       <div class="pill"><span class="dot"></span><span id="statusText">starting camera…</span></div>
     </div>
+    <button class="hud-toggle" id="hudToggle" aria-label="Toggle minimal HUD">⤢</button>
   </div>
 
   <div class="controls">
@@ -175,8 +241,10 @@
     </div>
     <div class="bottom-row">
       <button id="flipBtn" class="side-btn" aria-label="Flip camera">⟲</button>
+      <button id="photoBtn" class="side-btn" aria-label="Take photo">◎</button>
       <button id="recordBtn"><div class="inner"></div></button>
       <a id="saveLink" download="motion.mp4">Save last clip</a>
+      <a id="savePhotoLink" download="motion.png">Save photo</a>
     </div>
   </div>
 
@@ -192,9 +260,13 @@
   const statusText = document.getElementById('statusText');
   const recordBtn = document.getElementById('recordBtn');
   const flipBtn = document.getElementById('flipBtn');
+  const photoBtn = document.getElementById('photoBtn');
   const saveLink = document.getElementById('saveLink');
+  const savePhotoLink = document.getElementById('savePhotoLink');
   const sensitivitySlider = document.getElementById('sensitivity');
   const trailSlider = document.getElementById('trail');
+  const hudToggle = document.getElementById('hudToggle');
+  const flashEl = document.getElementById('flash');
 
   // Processing runs at a fixed internal resolution for consistent
   // performance across phones, independent of the display size.
@@ -226,6 +298,16 @@
     statusText.textContent = text;
     statusEl.classList.toggle('recording', !!recording);
   }
+
+  // --- Minimal HUD toggle --------------------------------------------------
+  let compact = false;
+  function setCompact(on) {
+    compact = on;
+    document.body.classList.toggle('compact', compact);
+    hudToggle.textContent = compact ? '⤡' : '⤢';
+    hudToggle.setAttribute('aria-label', compact ? 'Show full HUD' : 'Show minimal HUD');
+  }
+  hudToggle.addEventListener('click', () => setCompact(!compact));
 
   let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
   let currentStream = null;
@@ -355,6 +437,34 @@
     }
     requestAnimationFrame(loop);
   }
+
+  // --- Photo capture -------------------------------------------------------
+  function takePhoto() {
+    // Fire the flash for feedback
+    flashEl.classList.remove('fire');
+    // Force reflow so the animation can restart if fired again quickly
+    void flashEl.offsetWidth;
+    flashEl.classList.add('fire');
+
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      savePhotoLink.href = url;
+      savePhotoLink.download = `motion-photo-${Date.now()}.png`;
+      savePhotoLink.classList.add('show');
+
+      // Trigger an immediate download too, so the person doesn't have to
+      // tap the link manually if they just want the shot saved right away.
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = savePhotoLink.download;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, 'image/png');
+  }
+
+  photoBtn.addEventListener('click', takePhoto);
 
   // --- Recording ---------------------------------------------------------
   let recorder = null;
