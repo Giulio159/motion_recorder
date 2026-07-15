@@ -270,8 +270,9 @@
 
   // Processing runs at a fixed internal resolution for consistent
   // performance across phones, independent of the display size.
-  const PROC_W = 480;
-  const PROC_H = 640;
+  // Landscape orientation: wide canvas so recordings/photos come out horizontal.
+  const PROC_W = 640;
+  const PROC_H = 480;
 
   const proc = document.createElement('canvas');
   proc.width = PROC_W;
@@ -329,8 +330,9 @@
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 720 },
-          height: { ideal: 1280 }
+          // Landscape ideal dimensions so the sensor is asked for a wide frame.
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
         },
         audio: false
       });
