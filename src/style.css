@@ -1,0 +1,51 @@
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --panel: #0a0a0a;
+  --line: #262626;
+  --text: #f2f2f2;
+  --muted: #8a8a8a;
+  --rec: #e0332f;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body, #app { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+button, select, input { font: inherit; }
+button { color: inherit; }
+.app { height: 100dvh; display: flex; flex-direction: column; }
+.stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; background: #000; }
+#view { width: 100%; height: 100%; display: block; object-fit: contain; }
+.status { position: absolute; z-index: 3; top: calc(env(safe-area-inset-top) + 12px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgb(0 0 0 / .62); color: var(--muted); font-size: 12px; white-space: nowrap; }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.status.recording .dot { background: var(--rec); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+.hud-toggle { position: absolute; z-index: 4; top: calc(env(safe-area-inset-top) + 10px); right: 12px; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 50%; background: rgb(0 0 0 / .62); }
+.start-panel { position: absolute; z-index: 5; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 30px; text-align: center; background: #000; }
+.start-panel.hidden { display: none; }
+.start-panel h1 { margin: 0; font-size: clamp(32px, 10vw, 56px); }
+.start-panel p { margin: 0; color: var(--muted); }
+.primary { padding: 13px 20px; border: 0; border-radius: 999px; background: var(--text); color: #000; font-weight: 700; }
+.flash { position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: 0; background: white; }
+.flash.fire { animation: flash .25s ease-out; }
+@keyframes flash { from { opacity: .85; } to { opacity: 0; } }
+.controls { flex: none; display: flex; flex-direction: column; gap: 12px; padding: 14px 18px calc(14px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); transition: max-height .2s, padding .2s, opacity .2s; }
+.controls.compact { max-height: 98px; overflow: hidden; padding-top: 8px; opacity: .96; }
+.controls.compact .settings-grid, .controls.compact .slider-row, .controls.compact .downloads { display: none; }
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.settings-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 10px; background: #111; color: var(--text); padding: 0 10px; }
+.slider-row { display: grid; grid-template-columns: 90px 1fr 42px; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
+.slider-row output { text-align: right; color: var(--text); }
+input[type="range"] { width: 100%; accent-color: var(--text); }
+.bottom-row { display: flex; align-items: center; justify-content: center; gap: 22px; }
+.side-btn { width: 46px; height: 46px; border: 1px solid var(--line); border-radius: 50%; background: transparent; font-size: 21px; }
+.side-btn:disabled { opacity: .35; }
+.record-btn { width: 72px; height: 72px; display: grid; place-items: center; border: 3px solid var(--text); border-radius: 50%; background: transparent; }
+.record-btn span { width: 54px; height: 54px; border-radius: 50%; background: var(--rec); transition: .16s; }
+.record-btn.recording span { width: 25px; height: 25px; border-radius: 6px; }
+.downloads { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.downloads a { display: none; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); text-decoration: none; font-size: 12px; }
+.downloads a.show { display: inline-flex; }
+@media (orientation: landscape) and (max-height: 560px) {
+  .controls { position: absolute; z-index: 4; right: 0; bottom: 0; width: min(420px, 46vw); background: rgb(10 10 10 / .9); }
+}
