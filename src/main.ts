@@ -11,7 +11,6 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
 const sourceCanvas = document.createElement('canvas');
 const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true })!;
 
-const stage = document.querySelector<HTMLElement>('#stage')!;
 const controls = document.querySelector<HTMLElement>('#controls')!;
 const startPanel = document.querySelector<HTMLElement>('#startPanel')!;
 const startBtn = document.querySelector<HTMLButtonElement>('#startBtn')!;
@@ -34,9 +33,16 @@ const hudToggle = document.querySelector<HTMLButtonElement>('#hudToggle')!;
 const flash = document.querySelector<HTMLElement>('#flash')!;
 const saveLink = document.querySelector<HTMLAnchorElement>('#saveLink')!;
 const savePhotoLink = document.querySelector<HTMLAnchorElement>('#savePhotoLink')!;
+const appVersionEl = document.querySelector<HTMLElement>('#appVersion');
+
+if (appVersionEl) {
+  appVersionEl.textContent = `Motion Cam v${__APP_VERSION__}`;
+}
 
 const PROCESSING_WIDTH = 640;
 const GAIN = 4;
+const ZOOM_APPLY_DELAY_MS = 120;
+
 let stream: MediaStream | null = null;
 let track: MediaStreamTrack | null = null;
 let facingMode: 'user' | 'environment' = 'environment';
@@ -52,6 +58,10 @@ let lastVideoUrl: string | null = null;
 let lastPhotoUrl: string | null = null;
 let frameCounter = 0;
 let meterStartedAt = performance.now();
+
+let zoomTimer: number | null = null;
+let pendingZoom: number | null = null;
+let zoomApplying = false;
 
 const { processor, engine } = await createFrameProcessor();
 setStatus(`Motore ${engine}`);
@@ -93,9 +103,9 @@ function configureFps(): void {
 
   fpsSelect.replaceChildren();
   for (const [label, value] of presets) {
-    const option = new Option(label, String(value));
-    fpsSelect.add(option);
+    fpsSelect.add(new Option(label, String(value)));
   }
+
   requestedFps = [...presets.values()].reduce((best, value) => Math.abs(value - current) < Math.abs(best - current) ? value : best, max);
   fpsSelect.value = String(requestedFps);
   fpsSelect.disabled = false;
@@ -106,10 +116,12 @@ function configureZoom(): void {
   const capabilities = track.getCapabilities() as MediaTrackCapabilities & { zoom?: NumericCapability };
   const settings = track.getSettings() as MediaTrackSettings & { zoom?: number };
   const range = numericCapability(capabilities.zoom);
+
   if (!range) {
     zoomRow.hidden = true;
     return;
   }
+
   zoom.min = String(range.min);
   zoom.max = String(range.max);
   zoom.step = String(range.step || 0.1);
@@ -251,25 +263,60 @@ async function applyFps(fps: number): Promise<void> {
   if (!track) return;
   try {
     await track.applyConstraints({ frameRate: { ideal: fps, max: fps } });
-    requestedFps = fps;
     const actual = track.getSettings().frameRate;
-    setStatus(actual ? `Live · camera ${actual.toFixed(0)} fps` : 'Live');
+    requestedFps = actual ?? fps;
+    setStatus(actual ? `Live · camera ${actual.toFixed(0)} fps` : `Live · richiesta ${fps} fps`);
   } catch (error) {
     console.warn('FPS non applicabili', error);
     configureFps();
   }
 }
 
-async function applyZoom(value: number): Promise<void> {
+async function applyZoomNow(value: number): Promise<void> {
   if (!track) return;
+
+  if (zoomApplying) {
+    pendingZoom = value;
+    return;
+  }
+
+  zoomApplying = true;
   try {
-    await track.applyConstraints({ advanced: [{ zoom: value } as MediaTrackConstraintSet] });
+    await track.applyConstraints({
+      advanced: [{ zoom: value } as MediaTrackConstraintSet]
+    });
+
     const actual = (track.getSettings() as MediaTrackSettings & { zoom?: number }).zoom ?? value;
     zoom.value = String(actual);
     zoomValue.value = `${actual.toFixed(1)}×`;
   } catch (error) {
     console.warn('Zoom non applicabile', error);
+  } finally {
+    zoomApplying = false;
+
+    if (pendingZoom !== null) {
+      const next = pendingZoom;
+      pendingZoom = null;
+      if (Math.abs(next - Number(zoom.value)) > 0.001) {
+        void applyZoomNow(next);
+      }
+    }
   }
+}
+
+function scheduleZoom(value: number, immediate = false): void {
+  pendingZoom = value;
+
+  if (zoomTimer !== null) {
+    window.clearTimeout(zoomTimer);
+  }
+
+  zoomTimer = window.setTimeout(() => {
+    zoomTimer = null;
+    const next = pendingZoom;
+    pendingZoom = null;
+    if (next !== null) void applyZoomNow(next);
+  }, immediate ? 0 : ZOOM_APPLY_DELAY_MS);
 }
 
 function flashFeedback(): void {
@@ -326,7 +373,7 @@ function startRecording(): void {
   recording = true;
   recordBtn.classList.add('recording');
   saveLink.classList.remove('show');
-  setStatus('Registrazione', true);
+  setStatus(`Registrazione · ${Math.round(requestedFps)} fps`, true);
 }
 
 function stopRecording(): void {
@@ -344,14 +391,18 @@ hudToggle.addEventListener('click', () => {
   controls.classList.toggle('compact');
   hudToggle.textContent = controls.classList.contains('compact') ? '⤡' : '⤢';
 });
-fpsSelect.addEventListener('change', () => applyFps(Number(fpsSelect.value)));
+fpsSelect.addEventListener('change', () => { void applyFps(Number(fpsSelect.value)); });
 aspectSelect.addEventListener('change', () => {
   aspectMode = aspectSelect.value as AspectMode;
   if (track) resizeProcessingSurface();
 });
 zoom.addEventListener('input', () => {
-  zoomValue.value = `${Number(zoom.value).toFixed(1)}×`;
-  void applyZoom(Number(zoom.value));
+  const value = Number(zoom.value);
+  zoomValue.value = `${value.toFixed(1)}×`;
+  scheduleZoom(value);
+});
+zoom.addEventListener('change', () => {
+  scheduleZoom(Number(zoom.value), true);
 });
 sensitivity.addEventListener('input', () => { sensitivityValue.value = sensitivity.value; });
 trail.addEventListener('input', () => { trailValue.value = trail.value; });
@@ -371,6 +422,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('beforeunload', () => {
   stopCamera();
+  if (zoomTimer !== null) window.clearTimeout(zoomTimer);
   if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
   if (lastPhotoUrl) URL.revokeObjectURL(lastPhotoUrl);
 });

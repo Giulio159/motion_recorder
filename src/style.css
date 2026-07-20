@@ -20,6 +20,7 @@ button { color: inherit; }
 .status.recording .dot { background: var(--rec); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: .25; } }
 .hud-toggle { position: absolute; z-index: 4; top: calc(env(safe-area-inset-top) + 10px); right: 12px; width: 36px; height: 36px; border: 1px solid var(--line); border-radius: 50%; background: rgb(0 0 0 / .62); }
+.app-version { position: absolute; z-index: 4; left: 12px; bottom: 12px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; background: rgb(0 0 0 / .62); color: var(--muted); font-size: 11px; line-height: 1; letter-spacing: .04em; pointer-events: none; }
 .start-panel { position: absolute; z-index: 5; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; padding: 30px; text-align: center; background: #000; }
 .start-panel.hidden { display: none; }
 .start-panel h1 { margin: 0; font-size: clamp(32px, 10vw, 56px); }
@@ -36,7 +37,7 @@ button { color: inherit; }
 select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 10px; background: #111; color: var(--text); padding: 0 10px; }
 .slider-row { display: grid; grid-template-columns: 90px 1fr 42px; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .slider-row output { text-align: right; color: var(--text); }
-input[type="range"] { width: 100%; accent-color: var(--text); }
+input[type="range"] { width: 100%; accent-color: var(--text); touch-action: pan-x; }
 .bottom-row { display: flex; align-items: center; justify-content: center; gap: 22px; }
 .side-btn { width: 46px; height: 46px; border: 1px solid var(--line); border-radius: 50%; background: transparent; font-size: 21px; }
 .side-btn:disabled { opacity: .35; }
