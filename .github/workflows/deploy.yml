@@ -3,7 +3,7 @@ name: Deploy Motion Cam PWA
 on:
   push:
     branches:
-      - feature/motion-cam-pwa
+      - main
   workflow_dispatch:
 
 permissions:
