@@ -34,8 +34,8 @@
       <section class="controls" id="controls">
         <div class="settings-grid">
           <label>
-            FPS
-            <select id="fpsSelect" disabled></select>
+            Effetto
+            <select id="effectSelect"></select>
           </label>
           <label>
             Formato
@@ -47,23 +47,19 @@
           </label>
         </div>
 
+        <label class="slider-row">
+          <span>FPS camera</span>
+          <input id="fps" type="range" min="1" max="30" step="1" value="30" disabled />
+          <output id="fpsValue">—</output>
+        </label>
+
         <label class="slider-row" id="zoomRow" hidden>
           <span>Zoom</span>
           <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
           <output id="zoomValue">1×</output>
         </label>
 
-        <label class="slider-row">
-          <span>Sensibilità</span>
-          <input id="sensitivity" type="range" min="1" max="30" value="8" />
-          <output id="sensitivityValue">8</output>
-        </label>
-
-        <label class="slider-row">
-          <span>Scia</span>
-          <input id="trail" type="range" min="0" max="95" value="80" />
-          <output id="trailValue">80</output>
-        </label>
+        <div class="effect-controls" id="effectControls"></div>
 
         <div class="bottom-row">
           <button id="flipBtn" class="side-btn" aria-label="Cambia fotocamera">⟲</button>

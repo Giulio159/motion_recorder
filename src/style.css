@@ -38,6 +38,7 @@ select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-ra
 .slider-row { display: grid; grid-template-columns: 90px 1fr 42px; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
 .slider-row output { text-align: right; color: var(--text); }
 input[type="range"] { width: 100%; accent-color: var(--text); touch-action: pan-x; }
+.effect-controls { display: grid; gap: 12px; }
 .bottom-row { display: flex; align-items: center; justify-content: center; gap: 22px; }
 .side-btn { width: 46px; height: 46px; border: 1px solid var(--line); border-radius: 50%; background: transparent; font-size: 21px; }
 .side-btn:disabled { opacity: .35; }

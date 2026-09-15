@@ -47,7 +47,10 @@ export default defineConfig({
       },
 
       workbox: {
-        globPatterns: ['**/*.{js,css,html,png,svg,wasm}']
+        globPatterns: ['**/*.{js,css,html,png,svg}'],
+        // OpenCV.js is a large WebAssembly-enabled bundle. Cache it so the
+        // installed PWA can still start without a network connection.
+        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024
       }
     })
   ]
