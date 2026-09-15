@@ -1,7 +1,14 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
-import { createFrameProcessor } from './processors';
-import type { AspectMode, NumericCapability } from './types';
+import { EFFECT_DEFINITIONS, type EffectId } from './effect-config';
+import {
+  type AspectMode,
+  type MainToWorkerMessage,
+  type NumericCapability,
+  type ProcessingOptions,
+  type SliderDefinition,
+  type WorkerToMainMessage
+} from './types';
 
 registerSW({ immediate: true });
 
@@ -17,15 +24,14 @@ const startBtn = document.querySelector<HTMLButtonElement>('#startBtn')!;
 const status = document.querySelector<HTMLElement>('#status')!;
 const statusText = document.querySelector<HTMLElement>('#statusText')!;
 const fpsMeter = document.querySelector<HTMLElement>('#fpsMeter')!;
-const fpsSelect = document.querySelector<HTMLSelectElement>('#fpsSelect')!;
+const fps = document.querySelector<HTMLInputElement>('#fps')!;
+const fpsValue = document.querySelector<HTMLOutputElement>('#fpsValue')!;
+const effectSelect = document.querySelector<HTMLSelectElement>('#effectSelect')!;
 const aspectSelect = document.querySelector<HTMLSelectElement>('#aspectSelect')!;
 const zoomRow = document.querySelector<HTMLElement>('#zoomRow')!;
 const zoom = document.querySelector<HTMLInputElement>('#zoom')!;
 const zoomValue = document.querySelector<HTMLOutputElement>('#zoomValue')!;
-const sensitivity = document.querySelector<HTMLInputElement>('#sensitivity')!;
-const sensitivityValue = document.querySelector<HTMLOutputElement>('#sensitivityValue')!;
-const trail = document.querySelector<HTMLInputElement>('#trail')!;
-const trailValue = document.querySelector<HTMLOutputElement>('#trailValue')!;
+const effectControls = document.querySelector<HTMLElement>('#effectControls')!;
 const flipBtn = document.querySelector<HTMLButtonElement>('#flipBtn')!;
 const photoBtn = document.querySelector<HTMLButtonElement>('#photoBtn')!;
 const recordBtn = document.querySelector<HTMLButtonElement>('#recordBtn')!;
@@ -40,17 +46,22 @@ if (appVersionEl) {
 }
 
 const PROCESSING_WIDTH = 640;
-const GAIN = 4;
 const ZOOM_APPLY_DELAY_MS = 120;
+const FPS_APPLY_DELAY_MS = 180;
 
 let stream: MediaStream | null = null;
 let track: MediaStreamTrack | null = null;
 let facingMode: 'user' | 'environment' = 'environment';
 let aspectMode: AspectMode = 'native';
+let effectId: EffectId = EFFECT_DEFINITIONS[0].id;
 let requestedFps = 30;
 let running = false;
 let paused = false;
 let callbackId = 0;
+let workerReady = false;
+let workerBusy = false;
+let surfaceGeneration = 0;
+let nextFrameDueAt = 0;
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 let recording = false;
@@ -62,9 +73,114 @@ let meterStartedAt = performance.now();
 let zoomTimer: number | null = null;
 let pendingZoom: number | null = null;
 let zoomApplying = false;
+let fpsTimer: number | null = null;
+let pendingFps: number | null = null;
+let fpsApplying = false;
 
-const { processor, engine } = await createFrameProcessor();
-setStatus(`Motore ${engine}`);
+const processingWorker = new Worker(
+  new URL('./effect-worker.ts', import.meta.url),
+  { type: 'module' }
+);
+
+const effectValues = new Map<EffectId, ProcessingOptions>();
+
+for (const effect of EFFECT_DEFINITIONS) {
+  effectValues.set(effect.id, Object.fromEntries(effect.sliders.map((slider) => [slider.key, slider.defaultValue])));
+  effectSelect.add(new Option(effect.label, String(effect.id)));
+}
+effectSelect.value = String(effectId);
+
+function formatSliderValue(slider: SliderDefinition, value: number): string {
+  const displayed = value * (slider.displayMultiplier ?? 1);
+  const decimals = slider.decimals ?? (Number.isInteger(displayed) ? 0 : 2);
+  return `${displayed.toFixed(decimals)}${slider.suffix ?? ''}`;
+}
+
+function renderEffectControls(): void {
+  effectControls.replaceChildren();
+  const definition = EFFECT_DEFINITIONS.find((effect) => effect.id === effectId);
+  const values = effectValues.get(effectId);
+  if (!definition || !values) return;
+
+  for (const slider of definition.sliders) {
+    const row = document.createElement('label');
+    const label = document.createElement('span');
+    const input = document.createElement('input');
+    const output = document.createElement('output');
+
+    row.className = 'slider-row';
+    label.textContent = slider.label;
+    input.type = 'range';
+    input.min = String(slider.min);
+    input.max = String(slider.max);
+    input.step = String(slider.step);
+    input.value = String(values[slider.key] ?? slider.defaultValue);
+
+    const update = () => {
+      const value = Number(input.value);
+      values[slider.key] = value;
+      output.value = formatSliderValue(slider, value);
+    };
+
+    input.addEventListener('input', update);
+    update();
+    row.append(label, input, output);
+    effectControls.append(row);
+  }
+}
+
+renderEffectControls();
+
+function sendToWorker(message: MainToWorkerMessage, transfer: Transferable[] = []): void {
+  processingWorker.postMessage(message, transfer);
+}
+
+processingWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
+  const message = event.data;
+
+  if (message.type === 'ready') {
+    workerReady = true;
+    setStatus('OpenCV pronto');
+    return;
+  }
+
+  if (message.type === 'error') {
+    workerBusy = false;
+    console.error('Errore elaborazione:', message.message);
+    setStatus(`Errore: ${message.message}`);
+    return;
+  }
+
+  workerBusy = false;
+  if (
+    message.generation !== surfaceGeneration ||
+    message.width !== canvas.width ||
+    message.height !== canvas.height
+  ) return;
+
+  const frame = new ImageData(
+    new Uint8ClampedArray(message.buffer),
+    message.width,
+    message.height
+  );
+  ctx.putImageData(frame, 0, 0);
+  frameCounter++;
+
+  const now = performance.now();
+  if (now - meterStartedAt >= 1000) {
+    const measured = frameCounter * 1000 / (now - meterStartedAt);
+    fpsMeter.textContent = `${measured.toFixed(0)} fps`;
+    frameCounter = 0;
+    meterStartedAt = now;
+  }
+};
+
+processingWorker.onerror = (event) => {
+  workerReady = false;
+  workerBusy = false;
+  console.error('Worker non disponibile:', event.message);
+  setStatus('Worker non disponibile');
+};
 
 function setStatus(text: string, isRecording = false): void {
   statusText.textContent = text;
@@ -79,12 +195,6 @@ function numericCapability(value: unknown): NumericCapability | null {
     : null;
 }
 
-function preferredMedium(min: number, max: number): number {
-  const common = [15, 24, 25, 30, 50, 60, 120].filter((fps) => fps >= min && fps <= max);
-  const target = (min + max) / 2;
-  return common.reduce((best, fps) => Math.abs(fps - target) < Math.abs(best - target) ? fps : best, common[0] ?? Math.round(target));
-}
-
 function configureFps(): void {
   if (!track) return;
   const capabilities = track.getCapabilities() as MediaTrackCapabilities & { frameRate?: NumericCapability };
@@ -92,23 +202,13 @@ function configureFps(): void {
   const current = track.getSettings().frameRate ?? 30;
   const min = Math.max(1, Math.ceil(range?.min ?? current));
   const max = Math.max(min, Math.floor(range?.max ?? current));
-  const medium = preferredMedium(min, max);
-  const presets = new Map<string, number>([
-    [`Minimo · ${min}`, min],
-    [`Medio · ${medium}`, medium],
-    [`Massimo · ${max}`, max]
-  ]);
-  if (min <= 30 && max >= 30) presets.set('30 FPS', 30);
-  if (min <= 60 && max >= 60) presets.set('60 FPS', 60);
-
-  fpsSelect.replaceChildren();
-  for (const [label, value] of presets) {
-    fpsSelect.add(new Option(label, String(value)));
-  }
-
-  requestedFps = [...presets.values()].reduce((best, value) => Math.abs(value - current) < Math.abs(best - current) ? value : best, max);
-  fpsSelect.value = String(requestedFps);
-  fpsSelect.disabled = false;
+  requestedFps = Math.min(max, Math.max(min, Math.round(current)));
+  fps.min = String(min);
+  fps.max = String(max);
+  fps.step = '1';
+  fps.value = String(requestedFps);
+  fpsValue.value = `${requestedFps} fps`;
+  fps.disabled = false;
 }
 
 function configureZoom(): void {
@@ -143,8 +243,9 @@ function resizeProcessingSurface(): void {
   sourceCanvas.height = height;
   canvas.width = width;
   canvas.height = height;
-  processor.resize(width, height);
-  processor.reset();
+  surfaceGeneration++;
+  nextFrameDueAt = 0;
+  sendToWorker({ type: 'reset' });
 }
 
 function drawSourceFrame(): void {
@@ -172,26 +273,34 @@ function drawSourceFrame(): void {
   sourceCtx.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
 }
 
-function processFrame(): void {
+function processFrame(now = performance.now()): void {
   if (!running || paused) return;
-  if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+
+  const frameInterval = 1000 / Math.max(1, requestedFps);
+  // Camera-timed callbacks do not need a second FPS gate.
+  const hasVideoFrameCallback = 'requestVideoFrameCallback' in video;
+  const frameIsDue = hasVideoFrameCallback || now >= nextFrameDueAt;
+
+  if (
+    workerReady &&
+    !workerBusy &&
+    frameIsDue &&
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+  ) {
     drawSourceFrame();
     const input = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
-    const output = ctx.createImageData(canvas.width, canvas.height);
-    processor.process(input.data, output.data, {
-      threshold: Number(sensitivity.value),
-      decay: Number(trail.value) / 100,
-      gain: GAIN
-    });
-    ctx.putImageData(output, 0, 0);
-    frameCounter++;
-    const now = performance.now();
-    if (now - meterStartedAt >= 1000) {
-      const measured = frameCounter * 1000 / (now - meterStartedAt);
-      fpsMeter.textContent = `${measured.toFixed(0)} fps`;
-      frameCounter = 0;
-      meterStartedAt = now;
-    }
+    const buffer = input.data.buffer as ArrayBuffer;
+    workerBusy = true;
+    nextFrameDueAt = now + frameInterval;
+    sendToWorker({
+      type: 'process',
+      buffer,
+      width: sourceCanvas.width,
+      height: sourceCanvas.height,
+      generation: surfaceGeneration,
+      effectId,
+      options: effectValues.get(effectId) ?? {}
+    }, [buffer]);
   }
   scheduleFrame();
 }
@@ -199,7 +308,7 @@ function processFrame(): void {
 function scheduleFrame(): void {
   if (!running || paused) return;
   if ('requestVideoFrameCallback' in video) {
-    callbackId = video.requestVideoFrameCallback(() => processFrame());
+    callbackId = video.requestVideoFrameCallback((now) => processFrame(now));
   } else {
     callbackId = requestAnimationFrame(processFrame);
   }
@@ -261,15 +370,46 @@ async function startCamera(nextFacing = facingMode): Promise<void> {
 
 async function applyFps(fps: number): Promise<void> {
   if (!track) return;
+
+  if (fpsApplying) {
+    pendingFps = fps;
+    return;
+  }
+
+  fpsApplying = true;
   try {
     await track.applyConstraints({ frameRate: { ideal: fps, max: fps } });
     const actual = track.getSettings().frameRate;
-    requestedFps = actual ?? fps;
+    requestedFps = fps;
+    nextFrameDueAt = 0;
     setStatus(actual ? `Live · camera ${actual.toFixed(0)} fps` : `Live · richiesta ${fps} fps`);
   } catch (error) {
     console.warn('FPS non applicabili', error);
     configureFps();
+  } finally {
+    fpsApplying = false;
+
+    if (pendingFps !== null) {
+      const next = pendingFps;
+      pendingFps = null;
+      if (next !== requestedFps) void applyFps(next);
+    }
   }
+}
+
+function scheduleFps(value: number, immediate = false): void {
+  pendingFps = value;
+
+  if (fpsTimer !== null) {
+    window.clearTimeout(fpsTimer);
+  }
+
+  fpsTimer = window.setTimeout(() => {
+    fpsTimer = null;
+    const next = pendingFps;
+    pendingFps = null;
+    if (next !== null) void applyFps(next);
+  }, immediate ? 0 : FPS_APPLY_DELAY_MS);
 }
 
 async function applyZoomNow(value: number): Promise<void> {
@@ -391,7 +531,20 @@ hudToggle.addEventListener('click', () => {
   controls.classList.toggle('compact');
   hudToggle.textContent = controls.classList.contains('compact') ? '⤡' : '⤢';
 });
-fpsSelect.addEventListener('change', () => { void applyFps(Number(fpsSelect.value)); });
+fps.addEventListener('input', () => {
+  requestedFps = Number(fps.value);
+  fpsValue.value = `${requestedFps} fps`;
+  scheduleFps(requestedFps);
+});
+fps.addEventListener('change', () => {
+  scheduleFps(Number(fps.value), true);
+});
+effectSelect.addEventListener('change', () => {
+  effectId = Number(effectSelect.value) as EffectId;
+  renderEffectControls();
+  surfaceGeneration++;
+  sendToWorker({ type: 'reset' });
+});
 aspectSelect.addEventListener('change', () => {
   aspectMode = aspectSelect.value as AspectMode;
   if (track) resizeProcessingSurface();
@@ -404,9 +557,6 @@ zoom.addEventListener('input', () => {
 zoom.addEventListener('change', () => {
   scheduleZoom(Number(zoom.value), true);
 });
-sensitivity.addEventListener('input', () => { sensitivityValue.value = sensitivity.value; });
-trail.addEventListener('input', () => { trailValue.value = trail.value; });
-
 document.addEventListener('visibilitychange', () => {
   paused = document.hidden;
   if (paused) {
@@ -422,7 +572,9 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('beforeunload', () => {
   stopCamera();
+  processingWorker.terminate();
   if (zoomTimer !== null) window.clearTimeout(zoomTimer);
+  if (fpsTimer !== null) window.clearTimeout(fpsTimer);
   if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
   if (lastPhotoUrl) URL.revokeObjectURL(lastPhotoUrl);
 });

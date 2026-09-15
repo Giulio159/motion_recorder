@@ -1,13 +1,12 @@
 {
   "name": "motion-cam-pwa",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
-    "preview": "vite preview --host",
-    "build:wasm": "bash ./cpp/build-wasm.sh"
+    "preview": "vite preview --host"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
@@ -16,5 +15,8 @@
   },
   "allowScripts": {
     "esbuild@0.28.1": true
+  },
+  "dependencies": {
+    "@techstark/opencv-js": "^5.0.0-release.1"
   }
 }

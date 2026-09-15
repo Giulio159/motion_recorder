@@ -1,15 +1,24 @@
-export type AspectMode = 'native' | '4:3' | '16:9';
+import type { EffectId } from './effect-config';
 
-export interface ProcessingOptions {
-  threshold: number;
-  decay: number;
-  gain: number;
+export type AspectMode = 'native' | '4:3' | '16:9';
+export type ProcessingOptions = Record<string, number>;
+
+export interface SliderDefinition {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  defaultValue: number;
+  displayMultiplier?: number;
+  decimals?: number;
+  suffix?: string;
 }
 
-export interface FrameProcessor {
-  resize(width: number, height: number): void;
-  reset(): void;
-  process(input: Uint8ClampedArray, output: Uint8ClampedArray, options: ProcessingOptions): void;
+export interface EffectDefinition {
+  id: number;
+  label: string;
+  sliders: readonly SliderDefinition[];
 }
 
 export interface NumericCapability {
@@ -17,3 +26,20 @@ export interface NumericCapability {
   max: number;
   step?: number;
 }
+
+export type MainToWorkerMessage =
+  | {
+      type: 'process';
+      buffer: ArrayBuffer;
+      width: number;
+      height: number;
+      generation: number;
+      effectId: EffectId;
+      options: ProcessingOptions;
+    }
+  | { type: 'reset' };
+
+export type WorkerToMainMessage =
+  | { type: 'ready' }
+  | { type: 'processed'; buffer: ArrayBuffer; width: number; height: number; generation: number }
+  | { type: 'error'; message: string };

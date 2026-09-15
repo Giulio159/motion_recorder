@@ -4,6 +4,7 @@
     "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "esModuleInterop": true,
     "strict": true,
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
