@@ -46,8 +46,56 @@ input[type="range"] { width: 100%; accent-color: var(--text); touch-action: pan-
 .record-btn span { width: 54px; height: 54px; border-radius: 50%; background: var(--rec); transition: .16s; }
 .record-btn.recording span { width: 25px; height: 25px; border-radius: 6px; }
 .downloads { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
-.downloads a { display: none; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--text); text-decoration: none; font-size: 12px; }
-.downloads a.show { display: inline-flex; }
+.downloads button {
+  display: none;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.downloads button.show {
+  display: inline-flex;
+}
+.save-dialog {
+  width: min(360px, calc(100vw - 32px));
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.save-dialog::backdrop {
+  background: rgb(0 0 0 / .7);
+}
+
+.save-dialog-content {
+  display: grid;
+  gap: 10px;
+  padding: 20px;
+}
+
+.save-dialog-content h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  text-align: center;
+}
+
+.save-dialog-content button {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--text);
+  color: #000;
+}
+
+.save-dialog-content button.secondary {
+  background: transparent;
+  color: var(--text);
+}
 @media (orientation: landscape) and (max-height: 560px) {
   .controls { position: absolute; z-index: 4; right: 0; bottom: 0; width: min(420px, 46vw); background: rgb(10 10 10 / .9); }
 }

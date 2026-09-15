@@ -2,6 +2,11 @@ import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { EFFECT_DEFINITIONS, type EffectId } from './effect-config';
 import {
+  saveToFiles,
+  saveToGallery,
+  type CapturedMedia
+} from './media-save';
+import {
   type AspectMode,
   type MainToWorkerMessage,
   type NumericCapability,
@@ -37,8 +42,13 @@ const photoBtn = document.querySelector<HTMLButtonElement>('#photoBtn')!;
 const recordBtn = document.querySelector<HTMLButtonElement>('#recordBtn')!;
 const hudToggle = document.querySelector<HTMLButtonElement>('#hudToggle')!;
 const flash = document.querySelector<HTMLElement>('#flash')!;
-const saveLink = document.querySelector<HTMLAnchorElement>('#saveLink')!;
-const savePhotoLink = document.querySelector<HTMLAnchorElement>('#savePhotoLink')!;
+const saveLink = document.querySelector<HTMLButtonElement>('#saveLink')!;
+const savePhotoLink = document.querySelector<HTMLButtonElement>('#savePhotoLink')!;
+const saveDialog = document.querySelector<HTMLDialogElement>('#saveDialog')!;
+const saveQuestion = document.querySelector<HTMLElement>('#saveQuestion')!;
+const saveGalleryBtn = document.querySelector<HTMLButtonElement>('#saveGalleryBtn')!;
+const saveFilesBtn = document.querySelector<HTMLButtonElement>('#saveFilesBtn')!;
+const discardMediaBtn = document.querySelector<HTMLButtonElement>('#discardMediaBtn')!;
 const appVersionEl = document.querySelector<HTMLElement>('#appVersion');
 
 if (appVersionEl) {
@@ -65,8 +75,9 @@ let nextFrameDueAt = 0;
 let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 let recording = false;
-let lastVideoUrl: string | null = null;
-let lastPhotoUrl: string | null = null;
+let lastVideo: CapturedMedia | null = null;
+let lastPhoto: CapturedMedia | null = null;
+let currentSaveTarget: CapturedMedia | null = null;
 let frameCounter = 0;
 let meterStartedAt = performance.now();
 
@@ -465,21 +476,29 @@ function flashFeedback(): void {
   flash.classList.add('fire');
 }
 
-function replaceObjectUrl(previous: string | null, next: string): string {
-  if (previous) URL.revokeObjectURL(previous);
-  return next;
+function askHowToSave(media: CapturedMedia): void {
+  currentSaveTarget = media;
+  saveQuestion.textContent = media.kind === 'video'
+    ? 'Come vuoi salvare il video?'
+    : 'Come vuoi salvare la foto?';
+
+  saveDialog.showModal();
 }
 
 function takePhoto(): void {
   flashFeedback();
+
   canvas.toBlob((blob) => {
     if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    lastPhotoUrl = replaceObjectUrl(lastPhotoUrl, url);
-    savePhotoLink.href = url;
-    savePhotoLink.download = `motion-photo-${Date.now()}.png`;
+
+    lastPhoto = {
+      blob,
+      filename: `motion-photo-${Date.now()}.png`,
+      kind: 'photo'
+    };
+
     savePhotoLink.classList.add('show');
-    savePhotoLink.click();
+    askHowToSave(lastPhoto);
   }, 'image/png');
 }
 
@@ -502,12 +521,16 @@ function startRecording(): void {
   recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
   recorder.onstop = () => {
     const type = recorder?.mimeType || 'video/webm';
-    const blob = new Blob(chunks, { type });
-    const url = URL.createObjectURL(blob);
-    lastVideoUrl = replaceObjectUrl(lastVideoUrl, url);
-    saveLink.href = url;
-    saveLink.download = `motion-${Date.now()}.${type.includes('mp4') ? 'mp4' : 'webm'}`;
+    const extension = type.includes('mp4') ? 'mp4' : 'webm';
+  
+    lastVideo = {
+      blob: new Blob(chunks, { type }),
+      filename: `motion-${Date.now()}.${extension}`,
+      kind: 'video'
+    };
+  
     saveLink.classList.add('show');
+    askHowToSave(lastVideo);
   };
   recorder.start(1000);
   recording = true;
@@ -523,6 +546,46 @@ function stopRecording(): void {
   setStatus('Live');
 }
 
+saveGalleryBtn.addEventListener('click', async () => {
+  if (!currentSaveTarget) return;
+
+  try {
+    await saveToGallery(currentSaveTarget);
+    saveDialog.close();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+
+    const message = error instanceof Error
+      ? error.message
+      : 'Non è stato possibile aprire la galleria.';
+
+    alert(message);
+  }
+});
+
+saveFilesBtn.addEventListener('click', async () => {
+  if (!currentSaveTarget) return;
+
+  try {
+    await saveToFiles(currentSaveTarget);
+    saveDialog.close();
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return;
+    alert('Non è stato possibile salvare il file.');
+  }
+});
+
+discardMediaBtn.addEventListener('click', () => {
+  saveDialog.close();
+});
+
+saveLink.addEventListener('click', () => {
+  if (lastVideo) askHowToSave(lastVideo);
+});
+
+savePhotoLink.addEventListener('click', () => {
+  if (lastPhoto) askHowToSave(lastPhoto);
+});
 startBtn.addEventListener('click', () => startCamera());
 flipBtn.addEventListener('click', () => startCamera(facingMode === 'environment' ? 'user' : 'environment'));
 photoBtn.addEventListener('click', takePhoto);
@@ -575,6 +638,4 @@ window.addEventListener('beforeunload', () => {
   processingWorker.terminate();
   if (zoomTimer !== null) window.clearTimeout(zoomTimer);
   if (fpsTimer !== null) window.clearTimeout(fpsTimer);
-  if (lastVideoUrl) URL.revokeObjectURL(lastVideoUrl);
-  if (lastPhotoUrl) URL.revokeObjectURL(lastPhotoUrl);
 });
