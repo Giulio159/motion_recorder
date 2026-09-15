@@ -68,11 +68,30 @@
         </div>
 
         <div class="downloads">
-          <a id="saveLink" download>Salva ultimo video</a>
-          <a id="savePhotoLink" download>Salva ultima foto</a>
+          <button id="saveLink" type="button">Salva ultimo video</button>
+          <button id="savePhotoLink" type="button">Salva ultima foto</button>
         </div>
       </section>
     </main>
+    
+    <dialog id="saveDialog" class="save-dialog">
+      <div class="save-dialog-content">
+        <h2 id="saveQuestion">Come vuoi salvare il file?</h2>
+    
+        <button id="saveGalleryBtn" type="button">
+          Galleria foto
+        </button>
+    
+        <button id="saveFilesBtn" type="button">
+          File
+        </button>
+    
+        <button id="discardMediaBtn" type="button" class="secondary">
+          Non salvare
+        </button>
+      </div>
+    </dialog>
+    
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
