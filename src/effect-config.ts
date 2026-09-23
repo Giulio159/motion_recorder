@@ -15,6 +15,24 @@ export const EFFECT_DEFINITIONS = [
     sliders: [
       { key: 'intensity', label: 'Intensità', min: 1, max: 30, step: 1, defaultValue: 17 }
     ]
+  },
+  {
+    id: 2,
+    label: 'sminchia-bit',
+    sliders: [
+      { key: 'bitMode', label: 'Tipo di effetto', min: 0, max: 3, step: 1, defaultValue: 0 },
+      { key: 'bleedDecay', label: 'Bleeding orizzontale', min: 0, max: 0.99, step: 0.01, defaultValue: 0.9, decimals: 2 },
+      { key: 'pixelation', label: 'Pixelizzazione', min: 1, max: 32, step: 1, defaultValue: 4, suffix: '×' }
+    ]
+  },
+  {
+    id: 3,
+    label: 'sminchia-bit colori',
+    sliders: [
+      { key: 'colorMode', label: 'Tipo di effetto', min: 2, max: 8, step: 1, defaultValue: 2 },
+      { key: 'bleedDecay', label: 'Bleeding orizzontale', min: 0, max: 0.99, step: 0.01, defaultValue: 0.9, decimals: 2 },
+      { key: 'pixelation', label: 'Pixelizzazione', min: 1, max: 32, step: 1, defaultValue: 4, suffix: '×' }
+    ]
   }
 ] as const satisfies readonly EffectDefinition[];
 
