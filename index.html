@@ -1,97 +1,176 @@
 <!doctype html>
-<html lang="it">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#000000" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>Motion Cam</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#090909" />
+    <title>Motion Live</title>
   </head>
   <body>
-    <main class="app">
-      <section class="stage" id="stage">
-        <canvas id="view"></canvas>
-        <video id="cam" playsinline autoplay muted hidden></video>
-        <div class="flash" id="flash"></div>
+    <div id="app">
+      <main class="controller-shell" aria-label="Motion Live control console">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">MOTION LIVE</div>
+            <h1>Control console</h1>
+          </div>
 
-        <div class="status" id="status">
-          <span class="dot"></span>
-          <span id="statusText">Pronta</span>
-          <span id="fpsMeter"></span>
-        </div>
+          <div class="live-status">
+            <span id="statusDot" class="status-dot" data-state="off"></span>
+            <span id="statusText">Stopped</span>
+          </div>
+        </header>
 
-        <button class="hud-toggle" id="hudToggle" aria-label="Mostra o nascondi controlli">⤢</button>
-        <div class="app-version" id="appVersion"></div>
+        <section class="workspace">
+          <div class="preview-column">
+            <div class="preview-card">
+              <div class="card-header">
+                <div>
+                  <span class="section-label">HUD PREVIEW</span>
+                  <span class="hint">The audience output never contains this interface.</span>
+                </div>
+                <label class="toggle-control">
+                  <input id="previewEnabled" type="checkbox" checked />
+                  <span>Preview</span>
+                </label>
+              </div>
 
-        <div class="start-panel" id="startPanel">
-          <h1>Motion Cam</h1>
-          <p>Il video resta sul dispositivo.</p>
-          <button id="startBtn" class="primary">Avvia fotocamera</button>
-        </div>
-      </section>
+              <div class="preview-stage">
+                <canvas id="view"></canvas>
+                <div class="preview-placeholder">Start the camera to preview the processed feed</div>
+              </div>
+            </div>
 
-      <section class="controls" id="controls">
-        <div class="settings-grid">
-          <label>
-            Effetto
-            <select id="effectSelect"></select>
-          </label>
-          <label>
-            Formato
-            <select id="aspectSelect">
-              <option value="native">Nativo</option>
-              <option value="4:3">4:3</option>
-              <option value="16:9">16:9</option>
-            </select>
-          </label>
-        </div>
+            <div class="performance-grid">
+              <div class="metric-card">
+                <span>OUTPUT FPS</span>
+                <strong id="actualFps">0.0 fps</strong>
+              </div>
+              <div class="metric-card">
+                <span>PROCESSING</span>
+                <strong id="processingTime">—</strong>
+              </div>
+              <div class="metric-card">
+                <span>SKIPPED SLOTS</span>
+                <strong id="skippedFrames">0</strong>
+              </div>
+              <div class="metric-card">
+                <span>CAMERA FPS</span>
+                <strong id="cameraFps">—</strong>
+              </div>
+            </div>
+          </div>
 
-        <label class="slider-row">
-          <span>FPS camera</span>
-          <input id="fps" type="range" min="1" max="30" step="1" value="30" disabled />
-          <output id="fpsValue">—</output>
-        </label>
+          <aside class="control-column">
+            <section class="panel">
+              <div class="panel-title-row">
+                <div>
+                  <span class="section-label">ROUTING</span>
+                  <h2>Input & output</h2>
+                </div>
+              </div>
 
-        <label class="slider-row" id="zoomRow" hidden>
-          <span>Zoom</span>
-          <input id="zoom" type="range" min="1" max="1" step="0.1" value="1" />
-          <output id="zoomValue">1×</output>
-        </label>
+              <div class="field-grid">
+                <label class="field field-wide">
+                  <span>Camera input</span>
+                  <div class="inline-control">
+                    <select id="cameraSelect"></select>
+                    <button id="refreshCamerasBtn" class="icon-button" type="button" title="Refresh cameras">↻</button>
+                  </div>
+                </label>
 
-        <div class="effect-controls" id="effectControls"></div>
+                <label class="field field-wide">
+                  <span>Audience display</span>
+                  <div class="inline-control">
+                    <select id="displaySelect"></select>
+                    <button id="refreshDisplaysBtn" class="icon-button" type="button" title="Refresh displays">↻</button>
+                  </div>
+                </label>
 
-        <div class="bottom-row">
-          <button id="flipBtn" class="side-btn" aria-label="Cambia fotocamera">⟲</button>
-          <button id="photoBtn" class="side-btn" aria-label="Scatta foto">◎</button>
-          <button id="recordBtn" class="record-btn" aria-label="Registra video"><span></span></button>
-        </div>
+                <label class="field">
+                  <span>Aspect</span>
+                  <select id="aspectSelect">
+                    <option value="16:9" selected>16:9</option>
+                    <option value="4:3">4:3</option>
+                    <option value="native">Camera native</option>
+                  </select>
+                </label>
 
-        <div class="downloads">
-          <button id="saveLink" type="button">Salva ultimo video</button>
-          <button id="savePhotoLink" type="button">Salva ultima foto</button>
-        </div>
-      </section>
-    </main>
-    
-    <dialog id="saveDialog" class="save-dialog">
-      <div class="save-dialog-content">
-        <h2 id="saveQuestion">Come vuoi salvare il file?</h2>
-    
-        <button id="saveGalleryBtn" type="button">
-          Galleria foto
-        </button>
-    
-        <button id="saveFilesBtn" type="button">
-          File
-        </button>
-    
-        <button id="discardMediaBtn" type="button" class="secondary">
-          Non salvare
-        </button>
-      </div>
-    </dialog>
-    
+                <label class="field">
+                  <span>Processing width</span>
+                  <select id="resolutionSelect">
+                    <option value="480">480 px · fastest</option>
+                    <option value="640" selected>640 px · balanced</option>
+                    <option value="960">960 px · high</option>
+                    <option value="1280">1280 px · heavy</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="button-row">
+                <button id="startBtn" class="primary-button" type="button">Start camera</button>
+                <button id="openOutputBtn" class="secondary-button" type="button">Open / move output</button>
+                <button id="closeOutputBtn" class="secondary-button" type="button">Close output</button>
+              </div>
+
+              <p class="panel-note">
+                On Chrome/Edge, allow multi-screen access to list a projector or external monitor.
+                Press <kbd>F</kbd> or double-click the clean output window to toggle fullscreen.
+              </p>
+            </section>
+
+            <section class="panel">
+              <span class="section-label">TIMING</span>
+              <h2>Frame budget</h2>
+
+              <label class="slider-row common-slider">
+                <span>Target FPS</span>
+                <input id="fps" type="range" min="1" max="60" step="1" value="30" />
+                <output id="fpsValue">30 fps</output>
+              </label>
+
+              <label class="slider-row common-slider">
+                <span>Smoothing</span>
+                <input id="transition" type="range" min="0" max="5000" step="25" value="350" />
+                <output id="transitionValue">350 ms</output>
+              </label>
+
+              <p class="panel-note">
+                No processing queue is allowed: if a frame misses its budget, it is skipped instead of increasing live latency.
+              </p>
+            </section>
+
+            <section class="panel effect-panel">
+              <span class="section-label">LOOK</span>
+              <h2>Effects</h2>
+
+              <label class="field">
+                <span>Active effect</span>
+                <select id="effectSelect"></select>
+              </label>
+
+              <div id="effectControls" class="effect-controls"></div>
+
+              <p class="panel-note">
+                Effect changes and numeric parameters use the same smoothing time. The transition engine renders only the destination effect to preserve FPS headroom.
+              </p>
+            </section>
+          </aside>
+        </section>
+
+        <footer>
+          <span>Motion Live <span id="appVersion"></span></span>
+          <span>live-performance V2</span>
+        </footer>
+      </main>
+
+      <main class="output-shell" aria-label="Clean audience output">
+        <canvas id="outputView"></canvas>
+      </main>
+
+      <video id="cam" playsinline muted aria-hidden="true"></video>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

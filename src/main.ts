@@ -1,641 +1,800 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import { EFFECT_DEFINITIONS, type EffectId } from './effect-config';
-import {
-  saveToFiles,
-  saveToGallery,
-  type CapturedMedia
-} from './media-save';
-import {
-  type AspectMode,
-  type MainToWorkerMessage,
-  type NumericCapability,
-  type ProcessingOptions,
-  type SliderDefinition,
-  type WorkerToMainMessage
+import type {
+  AspectMode,
+  MainToWorkerMessage,
+  NumericCapability,
+  OutputMessage,
+  ProcessingOptions,
+  SliderDefinition,
+  WorkerToMainMessage
 } from './types';
 
 registerSW({ immediate: true });
 
-const video = document.querySelector<HTMLVideoElement>('#cam')!;
-const canvas = document.querySelector<HTMLCanvasElement>('#view')!;
-const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-const sourceCanvas = document.createElement('canvas');
-const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true })!;
+const params = new URLSearchParams(window.location.search);
+const OUTPUT_MODE = params.get('output') === '1';
+const MESSAGE_ORIGIN = window.location.origin === 'null' ? '*' : window.location.origin;
 
-const controls = document.querySelector<HTMLElement>('#controls')!;
-const startPanel = document.querySelector<HTMLElement>('#startPanel')!;
-const startBtn = document.querySelector<HTMLButtonElement>('#startBtn')!;
-const status = document.querySelector<HTMLElement>('#status')!;
-const statusText = document.querySelector<HTMLElement>('#statusText')!;
-const fpsMeter = document.querySelector<HTMLElement>('#fpsMeter')!;
-const fps = document.querySelector<HTMLInputElement>('#fps')!;
-const fpsValue = document.querySelector<HTMLOutputElement>('#fpsValue')!;
-const effectSelect = document.querySelector<HTMLSelectElement>('#effectSelect')!;
-const aspectSelect = document.querySelector<HTMLSelectElement>('#aspectSelect')!;
-const zoomRow = document.querySelector<HTMLElement>('#zoomRow')!;
-const zoom = document.querySelector<HTMLInputElement>('#zoom')!;
-const zoomValue = document.querySelector<HTMLOutputElement>('#zoomValue')!;
-const effectControls = document.querySelector<HTMLElement>('#effectControls')!;
-const flipBtn = document.querySelector<HTMLButtonElement>('#flipBtn')!;
-const photoBtn = document.querySelector<HTMLButtonElement>('#photoBtn')!;
-const recordBtn = document.querySelector<HTMLButtonElement>('#recordBtn')!;
-const hudToggle = document.querySelector<HTMLButtonElement>('#hudToggle')!;
-const flash = document.querySelector<HTMLElement>('#flash')!;
-const saveLink = document.querySelector<HTMLButtonElement>('#saveLink')!;
-const savePhotoLink = document.querySelector<HTMLButtonElement>('#savePhotoLink')!;
-const saveDialog = document.querySelector<HTMLDialogElement>('#saveDialog')!;
-const saveQuestion = document.querySelector<HTMLElement>('#saveQuestion')!;
-const saveGalleryBtn = document.querySelector<HTMLButtonElement>('#saveGalleryBtn')!;
-const saveFilesBtn = document.querySelector<HTMLButtonElement>('#saveFilesBtn')!;
-const discardMediaBtn = document.querySelector<HTMLButtonElement>('#discardMediaBtn')!;
-const appVersionEl = document.querySelector<HTMLElement>('#appVersion');
-
-if (appVersionEl) {
-  appVersionEl.textContent = `Motion Cam v${__APP_VERSION__}`;
+interface DisplayTarget {
+  key: string;
+  label: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 }
 
-const PROCESSING_WIDTH = 640;
-const ZOOM_APPLY_DELAY_MS = 120;
-const FPS_APPLY_DELAY_MS = 180;
-
-let stream: MediaStream | null = null;
-let track: MediaStreamTrack | null = null;
-let facingMode: 'user' | 'environment' = 'environment';
-let aspectMode: AspectMode = 'native';
-let effectId: EffectId = EFFECT_DEFINITIONS[0].id;
-let requestedFps = 30;
-let running = false;
-let paused = false;
-let callbackId = 0;
-let workerReady = false;
-let workerBusy = false;
-let surfaceGeneration = 0;
-let nextFrameDueAt = 0;
-let recorder: MediaRecorder | null = null;
-let chunks: Blob[] = [];
-let recording = false;
-let lastVideo: CapturedMedia | null = null;
-let lastPhoto: CapturedMedia | null = null;
-let currentSaveTarget: CapturedMedia | null = null;
-let frameCounter = 0;
-let meterStartedAt = performance.now();
-
-let zoomTimer: number | null = null;
-let pendingZoom: number | null = null;
-let zoomApplying = false;
-let fpsTimer: number | null = null;
-let pendingFps: number | null = null;
-let fpsApplying = false;
-
-const processingWorker = new Worker(
-  new URL('./effect-worker.ts', import.meta.url),
-  { type: 'module' }
-);
-
-const effectValues = new Map<EffectId, ProcessingOptions>();
-
-for (const effect of EFFECT_DEFINITIONS) {
-  effectValues.set(effect.id, Object.fromEntries(effect.sliders.map((slider) => [slider.key, slider.defaultValue])));
-  effectSelect.add(new Option(effect.label, String(effect.id)));
-}
-effectSelect.value = String(effectId);
-
-function formatSliderValue(slider: SliderDefinition, value: number): string {
-  const displayed = value * (slider.displayMultiplier ?? 1);
-  const decimals = slider.decimals ?? (Number.isInteger(displayed) ? 0 : 2);
-  return `${displayed.toFixed(decimals)}${slider.suffix ?? ''}`;
+interface DetailedScreen extends Screen {
+  left: number;
+  top: number;
+  availLeft: number;
+  availTop: number;
+  availWidth: number;
+  availHeight: number;
+  label?: string;
+  isPrimary?: boolean;
 }
 
-function renderEffectControls(): void {
-  effectControls.replaceChildren();
-  const definition = EFFECT_DEFINITIONS.find((effect) => effect.id === effectId);
-  const values = effectValues.get(effectId);
-  if (!definition || !values) return;
+interface ScreenDetailsLike extends EventTarget {
+  screens: DetailedScreen[];
+  currentScreen: DetailedScreen;
+}
 
-  for (const slider of definition.sliders) {
-    const row = document.createElement('label');
-    const label = document.createElement('span');
-    const input = document.createElement('input');
-    const output = document.createElement('output');
+type WindowWithScreenDetails = Window & {
+  getScreenDetails?: () => Promise<ScreenDetailsLike>;
+};
 
-    row.className = 'slider-row';
-    label.textContent = slider.label;
-    input.type = 'range';
-    input.min = String(slider.min);
-    input.max = String(slider.max);
-    input.step = String(slider.step);
-    input.value = String(values[slider.key] ?? slider.defaultValue);
+function required<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) throw new Error(`Elemento non trovato: ${selector}`);
+  return element;
+}
 
-    const update = () => {
-      const value = Number(input.value);
-      values[slider.key] = value;
-      output.value = formatSliderValue(slider, value);
-    };
+function setVersion(): void {
+  const version = document.querySelector<HTMLElement>('#appVersion');
+  if (version) version.textContent = `v${__APP_VERSION__}`;
+}
 
-    input.addEventListener('input', update);
-    update();
-    row.append(label, input, output);
-    effectControls.append(row);
+function initOutputWindow(): void {
+  document.body.classList.add('output-mode');
+  setVersion();
+
+  const canvas = required<HTMLCanvasElement>('#outputView');
+  const ctx = canvas.getContext('2d', { alpha: false })!;
+
+  const resizeCanvas = (width: number, height: number) => {
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+  };
+
+  const clear = () => {
+    ctx.save();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width || 1, canvas.height || 1);
+    ctx.restore();
+  };
+
+  window.addEventListener('message', (event: MessageEvent<OutputMessage>) => {
+    if (MESSAGE_ORIGIN !== '*' && event.origin !== MESSAGE_ORIGIN) return;
+    const message = event.data;
+    if (!message || typeof message !== 'object' || !('type' in message)) return;
+
+    if (message.type === 'motion-frame') {
+      resizeCanvas(message.width, message.height);
+      const frame = new ImageData(
+        new Uint8ClampedArray(message.buffer),
+        message.width,
+        message.height
+      );
+      ctx.putImageData(frame, 0, 0);
+      return;
+    }
+
+    if (message.type === 'motion-clear') clear();
+  });
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (error) {
+      console.warn('Fullscreen non disponibile', error);
+    }
+  };
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key.toLowerCase() === 'f') void toggleFullscreen();
+  });
+  window.addEventListener('dblclick', () => void toggleFullscreen());
+
+  const notifyReady = () => {
+    window.opener?.postMessage({ type: 'motion-output-ready' }, MESSAGE_ORIGIN);
+  };
+
+  clear();
+  notifyReady();
+  window.setInterval(notifyReady, 1500);
+
+  window.addEventListener('beforeunload', () => {
+    window.opener?.postMessage({ type: 'motion-output-closed' }, MESSAGE_ORIGIN);
+  });
+}
+
+function initController(): void {
+  document.body.classList.add('controller-mode');
+  setVersion();
+
+  const video = required<HTMLVideoElement>('#cam');
+  const canvas = required<HTMLCanvasElement>('#view');
+  const ctx = canvas.getContext('2d', { alpha: false })!;
+  const sourceCanvas = document.createElement('canvas');
+  const sourceCtx = sourceCanvas.getContext('2d', { willReadFrequently: true, alpha: false })!;
+
+  const cameraSelect = required<HTMLSelectElement>('#cameraSelect');
+  const displaySelect = required<HTMLSelectElement>('#displaySelect');
+  const effectSelect = required<HTMLSelectElement>('#effectSelect');
+  const aspectSelect = required<HTMLSelectElement>('#aspectSelect');
+  const resolutionSelect = required<HTMLSelectElement>('#resolutionSelect');
+  const fps = required<HTMLInputElement>('#fps');
+  const fpsValue = required<HTMLOutputElement>('#fpsValue');
+  const transition = required<HTMLInputElement>('#transition');
+  const transitionValue = required<HTMLOutputElement>('#transitionValue');
+  const effectControls = required<HTMLElement>('#effectControls');
+  const previewEnabled = required<HTMLInputElement>('#previewEnabled');
+  const startBtn = required<HTMLButtonElement>('#startBtn');
+  const refreshCamerasBtn = required<HTMLButtonElement>('#refreshCamerasBtn');
+  const refreshDisplaysBtn = required<HTMLButtonElement>('#refreshDisplaysBtn');
+  const openOutputBtn = required<HTMLButtonElement>('#openOutputBtn');
+  const closeOutputBtn = required<HTMLButtonElement>('#closeOutputBtn');
+  const statusText = required<HTMLElement>('#statusText');
+  const statusDot = required<HTMLElement>('#statusDot');
+  const actualFpsText = required<HTMLElement>('#actualFps');
+  const processingText = required<HTMLElement>('#processingTime');
+  const skippedText = required<HTMLElement>('#skippedFrames');
+  const cameraFpsText = required<HTMLElement>('#cameraFps');
+
+  let stream: MediaStream | null = null;
+  let track: MediaStreamTrack | null = null;
+  let running = false;
+  let workerReady = false;
+  let workerBusy = false;
+  let callbackId = 0;
+  let nextFrameDueAt = 0;
+  let surfaceGeneration = 0;
+  let requestedFps = 30;
+  let aspectMode: AspectMode = '16:9';
+  let processingWidth = 640;
+  let effectId: EffectId = EFFECT_DEFINITIONS[0].id;
+  let optionTimestamp = performance.now();
+
+  let outputWindow: Window | null = null;
+  let outputReady = false;
+  let displays: DisplayTarget[] = [];
+
+  let processedFrames = 0;
+  let skippedFrames = 0;
+  let metricsStartedAt = performance.now();
+  let processingEma = 0;
+
+  const effectTargets = new Map<EffectId, ProcessingOptions>();
+  const effectCurrents = new Map<EffectId, ProcessingOptions>();
+
+  for (const effect of EFFECT_DEFINITIONS) {
+    const defaults = Object.fromEntries(
+      effect.sliders.map((slider) => [slider.key, slider.defaultValue])
+    );
+    effectTargets.set(effect.id, { ...defaults });
+    effectCurrents.set(effect.id, { ...defaults });
+    effectSelect.add(new Option(effect.label, String(effect.id)));
   }
-}
+  effectSelect.value = String(effectId);
 
-renderEffectControls();
-
-function sendToWorker(message: MainToWorkerMessage, transfer: Transferable[] = []): void {
-  processingWorker.postMessage(message, transfer);
-}
-
-processingWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
-  const message = event.data;
-
-  if (message.type === 'ready') {
-    workerReady = true;
-    setStatus('OpenCV pronto');
-    return;
-  }
-
-  if (message.type === 'error') {
-    workerBusy = false;
-    console.error('Errore elaborazione:', message.message);
-    setStatus(`Errore: ${message.message}`);
-    return;
-  }
-
-  workerBusy = false;
-  if (
-    message.generation !== surfaceGeneration ||
-    message.width !== canvas.width ||
-    message.height !== canvas.height
-  ) return;
-
-  const frame = new ImageData(
-    new Uint8ClampedArray(message.buffer),
-    message.width,
-    message.height
+  const processingWorker = new Worker(
+    new URL('./effect-worker.ts', import.meta.url),
+    { type: 'module' }
   );
-  ctx.putImageData(frame, 0, 0);
-  frameCounter++;
 
-  const now = performance.now();
-  if (now - meterStartedAt >= 1000) {
-    const measured = frameCounter * 1000 / (now - meterStartedAt);
-    fpsMeter.textContent = `${measured.toFixed(0)} fps`;
-    frameCounter = 0;
-    meterStartedAt = now;
-  }
-};
-
-processingWorker.onerror = (event) => {
-  workerReady = false;
-  workerBusy = false;
-  console.error('Worker non disponibile:', event.message);
-  setStatus('Worker non disponibile');
-};
-
-function setStatus(text: string, isRecording = false): void {
-  statusText.textContent = text;
-  status.classList.toggle('recording', isRecording);
-}
-
-function numericCapability(value: unknown): NumericCapability | null {
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<NumericCapability>;
-  return typeof candidate.min === 'number' && typeof candidate.max === 'number'
-    ? { min: candidate.min, max: candidate.max, step: candidate.step }
-    : null;
-}
-
-function configureFps(): void {
-  if (!track) return;
-  const capabilities = track.getCapabilities() as MediaTrackCapabilities & { frameRate?: NumericCapability };
-  const range = numericCapability(capabilities.frameRate);
-  const current = track.getSettings().frameRate ?? 30;
-  const min = Math.max(1, Math.ceil(range?.min ?? current));
-  const max = Math.max(min, Math.floor(range?.max ?? current));
-  requestedFps = Math.min(max, Math.max(min, Math.round(current)));
-  fps.min = String(min);
-  fps.max = String(max);
-  fps.step = '1';
-  fps.value = String(requestedFps);
-  fpsValue.value = `${requestedFps} fps`;
-  fps.disabled = false;
-}
-
-function configureZoom(): void {
-  if (!track) return;
-  const capabilities = track.getCapabilities() as MediaTrackCapabilities & { zoom?: NumericCapability };
-  const settings = track.getSettings() as MediaTrackSettings & { zoom?: number };
-  const range = numericCapability(capabilities.zoom);
-
-  if (!range) {
-    zoomRow.hidden = true;
-    return;
+  function setStatus(text: string, state: 'off' | 'ready' | 'live' | 'error' = 'ready'): void {
+    statusText.textContent = text;
+    statusDot.dataset.state = state;
   }
 
-  zoom.min = String(range.min);
-  zoom.max = String(range.max);
-  zoom.step = String(range.step || 0.1);
-  zoom.value = String(settings.zoom ?? range.min);
-  zoomValue.value = `${Number(zoom.value).toFixed(1)}×`;
-  zoomRow.hidden = false;
-}
-
-function outputDimensions(): { width: number; height: number } {
-  const settings = track?.getSettings();
-  const nativeRatio = settings?.aspectRatio || ((settings?.width && settings?.height) ? settings.width / settings.height : video.videoWidth / video.videoHeight) || 4 / 3;
-  const ratio = aspectMode === '4:3' ? 4 / 3 : aspectMode === '16:9' ? 16 / 9 : nativeRatio;
-  return { width: PROCESSING_WIDTH, height: Math.max(1, Math.round(PROCESSING_WIDTH / ratio)) };
-}
-
-function resizeProcessingSurface(): void {
-  const { width, height } = outputDimensions();
-  sourceCanvas.width = width;
-  sourceCanvas.height = height;
-  canvas.width = width;
-  canvas.height = height;
-  surfaceGeneration++;
-  nextFrameDueAt = 0;
-  sendToWorker({ type: 'reset' });
-}
-
-function drawSourceFrame(): void {
-  const width = sourceCanvas.width;
-  const height = sourceCanvas.height;
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!vw || !vh) return;
-
-  if (aspectMode === 'native') {
-    sourceCtx.drawImage(video, 0, 0, vw, vh, 0, 0, width, height);
-    return;
+  function formatSliderValue(slider: SliderDefinition, value: number): string {
+    const displayed = value * (slider.displayMultiplier ?? 1);
+    const decimals = slider.decimals ?? (Number.isInteger(displayed) ? 0 : 2);
+    return `${displayed.toFixed(decimals)}${slider.suffix ?? ''}`;
   }
 
-  const targetRatio = width / height;
-  const sourceRatio = vw / vh;
-  let sx = 0, sy = 0, sw = vw, sh = vh;
-  if (sourceRatio > targetRatio) {
-    sw = vh * targetRatio;
-    sx = (vw - sw) / 2;
-  } else {
-    sh = vw / targetRatio;
-    sy = (vh - sh) / 2;
+  function renderEffectControls(): void {
+    effectControls.replaceChildren();
+    const definition = EFFECT_DEFINITIONS.find((effect) => effect.id === effectId);
+    const target = effectTargets.get(effectId);
+    if (!definition || !target) return;
+
+    for (const slider of definition.sliders) {
+      const row = document.createElement('label');
+      row.className = 'slider-row';
+
+      const label = document.createElement('span');
+      label.textContent = slider.label;
+
+      const input = document.createElement('input');
+      input.type = 'range';
+      input.min = String(slider.min);
+      input.max = String(slider.max);
+      input.step = String(slider.step);
+      input.value = String(target[slider.key] ?? slider.defaultValue);
+
+      const output = document.createElement('output');
+
+      const update = () => {
+        const value = Number(input.value);
+        target[slider.key] = value;
+        output.value = formatSliderValue(slider, value);
+      };
+
+      input.addEventListener('input', update);
+      update();
+      row.append(label, input, output);
+      effectControls.append(row);
+    }
   }
-  sourceCtx.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
-}
 
-function processFrame(now = performance.now()): void {
-  if (!running || paused) return;
+  renderEffectControls();
 
-  const frameInterval = 1000 / Math.max(1, requestedFps);
-  // Camera-timed callbacks do not need a second FPS gate.
-  const hasVideoFrameCallback = 'requestVideoFrameCallback' in video;
-  const frameIsDue = hasVideoFrameCallback || now >= nextFrameDueAt;
+  function currentTransitionMs(): number {
+    return Math.max(0, Number(transition.value));
+  }
 
-  if (
-    workerReady &&
-    !workerBusy &&
-    frameIsDue &&
-    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
-  ) {
+  function smoothedOptions(id: EffectId, now: number): ProcessingOptions {
+    const target = effectTargets.get(id) ?? {};
+    const current = effectCurrents.get(id) ?? {};
+    const elapsed = Math.max(0, now - optionTimestamp);
+    optionTimestamp = now;
+    const duration = currentTransitionMs();
+    const factor = duration <= 0
+      ? 1
+      : Math.min(1, 1 - Math.exp(-4.6 * elapsed / Math.max(1, duration)));
+    const definition = EFFECT_DEFINITIONS.find((effect) => effect.id === id);
+    const crossfadeKeys = new Set<string>(definition?.crossfadeKeys ?? []);
+
+    for (const [key, targetValue] of Object.entries(target)) {
+      if (crossfadeKeys.has(key)) {
+        // Discrete visual modes must switch once. The worker crossfades the
+        // rendered images; interpolating the integer selector itself would
+        // step through intermediate modes and visibly jump.
+        current[key] = targetValue;
+        continue;
+      }
+
+      const oldValue = current[key] ?? targetValue;
+      current[key] = oldValue + (targetValue - oldValue) * factor;
+    }
+    effectCurrents.set(id, current);
+    return { ...current };
+  }
+
+  function numericCapability(value: unknown): NumericCapability | null {
+    if (!value || typeof value !== 'object') return null;
+    const candidate = value as Partial<NumericCapability>;
+    return typeof candidate.min === 'number' && typeof candidate.max === 'number'
+      ? { min: candidate.min, max: candidate.max, step: candidate.step }
+      : null;
+  }
+
+  function configureFpsControl(): void {
+    if (!track) return;
+    const capabilities = track.getCapabilities() as MediaTrackCapabilities & {
+      frameRate?: NumericCapability;
+    };
+    const range = numericCapability(capabilities.frameRate);
+    const current = track.getSettings().frameRate ?? requestedFps;
+    const min = Math.max(1, Math.ceil(range?.min ?? Math.min(15, current)));
+    const max = Math.max(min, Math.floor(range?.max ?? Math.max(60, current)));
+
+    requestedFps = Math.min(max, Math.max(min, requestedFps));
+    fps.min = String(min);
+    fps.max = String(max);
+    fps.step = '1';
+    fps.value = String(Math.round(requestedFps));
+    fpsValue.value = `${Math.round(requestedFps)} fps`;
+  }
+
+  async function refreshCameras(): Promise<void> {
+    const previous = cameraSelect.value;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter((device) => device.kind === 'videoinput');
+
+    cameraSelect.replaceChildren();
+    if (!cameras.length) {
+      cameraSelect.add(new Option('Default camera', ''));
+      return;
+    }
+
+    cameras.forEach((camera, index) => {
+      cameraSelect.add(new Option(camera.label || `Camera ${index + 1}`, camera.deviceId));
+    });
+
+    const activeDevice = track?.getSettings().deviceId;
+    const preferred = [previous, activeDevice].find(
+      (id) => id && cameras.some((camera) => camera.deviceId === id)
+    );
+    if (preferred) cameraSelect.value = preferred;
+  }
+
+  function fallbackDisplay(): DisplayTarget {
+    const screenLike = window.screen as Screen & Partial<DetailedScreen>;
+    return {
+      key: 'current',
+      label: 'Current display',
+      left: screenLike.availLeft ?? screenLike.left ?? 0,
+      top: screenLike.availTop ?? screenLike.top ?? 0,
+      width: screenLike.availWidth || screenLike.width,
+      height: screenLike.availHeight || screenLike.height
+    };
+  }
+
+  function renderDisplays(previousKey = displaySelect.value): void {
+    displaySelect.replaceChildren();
+    for (const display of displays) {
+      displaySelect.add(new Option(display.label, display.key));
+    }
+    if (displays.some((display) => display.key === previousKey)) {
+      displaySelect.value = previousKey;
+    }
+  }
+
+  async function refreshDisplays(requestPermission = true): Promise<void> {
+    const previous = displaySelect.value;
+    const api = window as WindowWithScreenDetails;
+
+    if (requestPermission && api.getScreenDetails) {
+      try {
+        const details = await api.getScreenDetails();
+        displays = details.screens.map((screen, index) => {
+          const left = screen.availLeft ?? screen.left;
+          const top = screen.availTop ?? screen.top;
+          const width = screen.availWidth || screen.width;
+          const height = screen.availHeight || screen.height;
+          const suffix = screen.isPrimary ? ' · primary' : '';
+          return {
+            key: `${left}:${top}:${width}:${height}`,
+            label: `${screen.label || `Display ${index + 1}`}${suffix}`,
+            left,
+            top,
+            width,
+            height
+          };
+        });
+      } catch (error) {
+        console.warn('Multi-screen permission non disponibile', error);
+      }
+    }
+
+    if (!displays.length) displays = [fallbackDisplay()];
+    renderDisplays(previous);
+  }
+
+  function selectedDisplay(): DisplayTarget {
+    return displays.find((display) => display.key === displaySelect.value)
+      ?? displays[0]
+      ?? fallbackDisplay();
+  }
+
+  function positionOutputWindow(): void {
+    if (!outputWindow || outputWindow.closed) return;
+    const display = selectedDisplay();
+    try {
+      outputWindow.moveTo(Math.round(display.left), Math.round(display.top));
+      outputWindow.resizeTo(Math.round(display.width), Math.round(display.height));
+    } catch (error) {
+      console.warn('Impossibile spostare automaticamente la finestra output', error);
+    }
+  }
+
+  async function openOutput(): Promise<void> {
+    await refreshDisplays(true);
+    const display = selectedDisplay();
+    const url = new URL(window.location.href);
+    url.searchParams.set('output', '1');
+
+    const features = [
+      'popup=yes',
+      `left=${Math.round(display.left)}`,
+      `top=${Math.round(display.top)}`,
+      `width=${Math.round(display.width)}`,
+      `height=${Math.round(display.height)}`
+    ].join(',');
+
+    outputWindow = window.open(url.toString(), 'motion-live-output', features);
+    outputReady = false;
+
+    if (!outputWindow) {
+      setStatus('Popup output bloccato dal browser', 'error');
+      return;
+    }
+
+    closeOutputBtn.disabled = false;
+    window.setTimeout(positionOutputWindow, 250);
+    window.setTimeout(positionOutputWindow, 900);
+  }
+
+  function closeOutput(): void {
+    if (outputWindow && !outputWindow.closed) outputWindow.close();
+    outputWindow = null;
+    outputReady = false;
+    closeOutputBtn.disabled = true;
+  }
+
+  function sendOutputClear(): void {
+    if (!outputWindow || outputWindow.closed || !outputReady) return;
+    outputWindow.postMessage({ type: 'motion-clear' } satisfies OutputMessage, MESSAGE_ORIGIN);
+  }
+
+  function outputDimensions(): { width: number; height: number } {
+    const settings = track?.getSettings();
+    const nativeRatio = settings?.aspectRatio
+      || ((settings?.width && settings?.height) ? settings.width / settings.height : 0)
+      || (video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9);
+    const ratio = aspectMode === '4:3' ? 4 / 3 : aspectMode === '16:9' ? 16 / 9 : nativeRatio;
+    return {
+      width: processingWidth,
+      height: Math.max(1, Math.round(processingWidth / ratio))
+    };
+  }
+
+  function resizeProcessingSurface(): void {
+    const { width, height } = outputDimensions();
+    sourceCanvas.width = width;
+    sourceCanvas.height = height;
+    canvas.width = width;
+    canvas.height = height;
+    surfaceGeneration++;
+    nextFrameDueAt = 0;
+    processingWorker.postMessage({ type: 'reset' } satisfies MainToWorkerMessage);
+  }
+
+  function drawSourceFrame(): void {
+    const width = sourceCanvas.width;
+    const height = sourceCanvas.height;
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) return;
+
+    if (aspectMode === 'native') {
+      sourceCtx.drawImage(video, 0, 0, vw, vh, 0, 0, width, height);
+      return;
+    }
+
+    const targetRatio = width / height;
+    const sourceRatio = vw / vh;
+    let sx = 0;
+    let sy = 0;
+    let sw = vw;
+    let sh = vh;
+
+    if (sourceRatio > targetRatio) {
+      sw = vh * targetRatio;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / targetRatio;
+      sy = (vh - sh) / 2;
+    }
+
+    sourceCtx.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
+  }
+
+  function submitFrame(now: number): void {
     drawSourceFrame();
     const input = sourceCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
     const buffer = input.data.buffer as ArrayBuffer;
     workerBusy = true;
-    nextFrameDueAt = now + frameInterval;
-    sendToWorker({
+
+    const message: MainToWorkerMessage = {
       type: 'process',
       buffer,
       width: sourceCanvas.width,
       height: sourceCanvas.height,
       generation: surfaceGeneration,
       effectId,
-      options: effectValues.get(effectId) ?? {}
-    }, [buffer]);
-  }
-  scheduleFrame();
-}
-
-function scheduleFrame(): void {
-  if (!running || paused) return;
-  if ('requestVideoFrameCallback' in video) {
-    callbackId = video.requestVideoFrameCallback((now) => processFrame(now));
-  } else {
-    callbackId = requestAnimationFrame(processFrame);
-  }
-}
-
-function stopLoop(): void {
-  running = false;
-  if ('cancelVideoFrameCallback' in video && callbackId) video.cancelVideoFrameCallback(callbackId);
-  else cancelAnimationFrame(callbackId);
-}
-
-function stopCamera(): void {
-  stopLoop();
-  stream?.getTracks().forEach((item) => item.stop());
-  stream = null;
-  track = null;
-  video.srcObject = null;
-}
-
-async function startCamera(nextFacing = facingMode): Promise<void> {
-  if (recording) return;
-  flipBtn.disabled = true;
-  setStatus('Apertura fotocamera…');
-  try {
-    const nextStream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: nextFacing },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: requestedFps },
-        resizeMode: 'none'
-      } as MediaTrackConstraints
-    });
-    stopCamera();
-    stream = nextStream;
-    track = nextStream.getVideoTracks()[0] ?? null;
-    if (!track) throw new Error('Nessuna traccia video disponibile');
-    facingMode = nextFacing;
-    video.srcObject = stream;
-    await video.play();
-    canvas.style.transform = facingMode === 'user' ? 'scaleX(-1)' : 'none';
-    configureFps();
-    configureZoom();
-    resizeProcessingSurface();
-    running = true;
-    paused = false;
-    scheduleFrame();
-    startPanel.classList.add('hidden');
-    setStatus('Live');
-  } catch (error) {
-    console.error(error);
-    setStatus('Fotocamera non disponibile');
-    startPanel.classList.remove('hidden');
-  } finally {
-    flipBtn.disabled = false;
-  }
-}
-
-async function applyFps(fps: number): Promise<void> {
-  if (!track) return;
-
-  if (fpsApplying) {
-    pendingFps = fps;
-    return;
+      options: smoothedOptions(effectId, now),
+      timestamp: now,
+      transitionMs: currentTransitionMs()
+    };
+    processingWorker.postMessage(message, [buffer]);
   }
 
-  fpsApplying = true;
-  try {
-    await track.applyConstraints({ frameRate: { ideal: fps, max: fps } });
-    const actual = track.getSettings().frameRate;
-    requestedFps = fps;
-    nextFrameDueAt = 0;
-    setStatus(actual ? `Live · camera ${actual.toFixed(0)} fps` : `Live · richiesta ${fps} fps`);
-  } catch (error) {
-    console.warn('FPS non applicabili', error);
-    configureFps();
-  } finally {
-    fpsApplying = false;
+  function tick(now = performance.now()): void {
+    if (!running) return;
 
-    if (pendingFps !== null) {
-      const next = pendingFps;
-      pendingFps = null;
-      if (next !== requestedFps) void applyFps(next);
-    }
-  }
-}
+    const interval = 1000 / Math.max(1, requestedFps);
+    if (nextFrameDueAt <= 0) nextFrameDueAt = now;
 
-function scheduleFps(value: number, immediate = false): void {
-  pendingFps = value;
+    if (now + 0.5 >= nextFrameDueAt) {
+      const slots = Math.max(1, Math.floor((now - nextFrameDueAt) / interval) + 1);
+      nextFrameDueAt += slots * interval;
+      skippedFrames += Math.max(0, slots - 1);
 
-  if (fpsTimer !== null) {
-    window.clearTimeout(fpsTimer);
-  }
-
-  fpsTimer = window.setTimeout(() => {
-    fpsTimer = null;
-    const next = pendingFps;
-    pendingFps = null;
-    if (next !== null) void applyFps(next);
-  }, immediate ? 0 : FPS_APPLY_DELAY_MS);
-}
-
-async function applyZoomNow(value: number): Promise<void> {
-  if (!track) return;
-
-  if (zoomApplying) {
-    pendingZoom = value;
-    return;
-  }
-
-  zoomApplying = true;
-  try {
-    await track.applyConstraints({
-      advanced: [{ zoom: value } as MediaTrackConstraintSet]
-    });
-
-    const actual = (track.getSettings() as MediaTrackSettings & { zoom?: number }).zoom ?? value;
-    zoom.value = String(actual);
-    zoomValue.value = `${actual.toFixed(1)}×`;
-  } catch (error) {
-    console.warn('Zoom non applicabile', error);
-  } finally {
-    zoomApplying = false;
-
-    if (pendingZoom !== null) {
-      const next = pendingZoom;
-      pendingZoom = null;
-      if (Math.abs(next - Number(zoom.value)) > 0.001) {
-        void applyZoomNow(next);
+      if (
+        workerReady &&
+        !workerBusy &&
+        video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        submitFrame(now);
+      } else {
+        skippedFrames++;
       }
     }
-  }
-}
 
-function scheduleZoom(value: number, immediate = false): void {
-  pendingZoom = value;
-
-  if (zoomTimer !== null) {
-    window.clearTimeout(zoomTimer);
-  }
-
-  zoomTimer = window.setTimeout(() => {
-    zoomTimer = null;
-    const next = pendingZoom;
-    pendingZoom = null;
-    if (next !== null) void applyZoomNow(next);
-  }, immediate ? 0 : ZOOM_APPLY_DELAY_MS);
-}
-
-function flashFeedback(): void {
-  flash.classList.remove('fire');
-  void flash.offsetWidth;
-  flash.classList.add('fire');
-}
-
-function askHowToSave(media: CapturedMedia): void {
-  currentSaveTarget = media;
-  saveQuestion.textContent = media.kind === 'video'
-    ? 'Come vuoi salvare il video?'
-    : 'Come vuoi salvare la foto?';
-
-  saveDialog.showModal();
-}
-
-function takePhoto(): void {
-  flashFeedback();
-
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-
-    lastPhoto = {
-      blob,
-      filename: `motion-photo-${Date.now()}.png`,
-      kind: 'photo'
-    };
-
-    savePhotoLink.classList.add('show');
-    askHowToSave(lastPhoto);
-  }, 'image/png');
-}
-
-function chooseMimeType(): string {
-  const candidates = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
-  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? '';
-}
-
-function startRecording(): void {
-  const canvasStream = canvas.captureStream(requestedFps);
-  const mimeType = chooseMimeType();
-  try {
-    recorder = mimeType ? new MediaRecorder(canvasStream, { mimeType }) : new MediaRecorder(canvasStream);
-  } catch (error) {
-    console.error(error);
-    setStatus('Registrazione non supportata');
-    return;
-  }
-  chunks = [];
-  recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-  recorder.onstop = () => {
-    const type = recorder?.mimeType || 'video/webm';
-    const extension = type.includes('mp4') ? 'mp4' : 'webm';
-  
-    lastVideo = {
-      blob: new Blob(chunks, { type }),
-      filename: `motion-${Date.now()}.${extension}`,
-      kind: 'video'
-    };
-  
-    saveLink.classList.add('show');
-    askHowToSave(lastVideo);
-  };
-  recorder.start(1000);
-  recording = true;
-  recordBtn.classList.add('recording');
-  saveLink.classList.remove('show');
-  setStatus(`Registrazione · ${Math.round(requestedFps)} fps`, true);
-}
-
-function stopRecording(): void {
-  if (recorder?.state !== 'inactive') recorder?.stop();
-  recording = false;
-  recordBtn.classList.remove('recording');
-  setStatus('Live');
-}
-
-saveGalleryBtn.addEventListener('click', async () => {
-  if (!currentSaveTarget) return;
-
-  try {
-    await saveToGallery(currentSaveTarget);
-    saveDialog.close();
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return;
-
-    const message = error instanceof Error
-      ? error.message
-      : 'Non è stato possibile aprire la galleria.';
-
-    alert(message);
-  }
-});
-
-saveFilesBtn.addEventListener('click', async () => {
-  if (!currentSaveTarget) return;
-
-  try {
-    await saveToFiles(currentSaveTarget);
-    saveDialog.close();
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return;
-    alert('Non è stato possibile salvare il file.');
-  }
-});
-
-discardMediaBtn.addEventListener('click', () => {
-  saveDialog.close();
-});
-
-saveLink.addEventListener('click', () => {
-  if (lastVideo) askHowToSave(lastVideo);
-});
-
-savePhotoLink.addEventListener('click', () => {
-  if (lastPhoto) askHowToSave(lastPhoto);
-});
-startBtn.addEventListener('click', () => startCamera());
-flipBtn.addEventListener('click', () => startCamera(facingMode === 'environment' ? 'user' : 'environment'));
-photoBtn.addEventListener('click', takePhoto);
-recordBtn.addEventListener('click', () => recording ? stopRecording() : startRecording());
-hudToggle.addEventListener('click', () => {
-  controls.classList.toggle('compact');
-  hudToggle.textContent = controls.classList.contains('compact') ? '⤡' : '⤢';
-});
-fps.addEventListener('input', () => {
-  requestedFps = Number(fps.value);
-  fpsValue.value = `${requestedFps} fps`;
-  scheduleFps(requestedFps);
-});
-fps.addEventListener('change', () => {
-  scheduleFps(Number(fps.value), true);
-});
-effectSelect.addEventListener('change', () => {
-  effectId = Number(effectSelect.value) as EffectId;
-  renderEffectControls();
-  surfaceGeneration++;
-  sendToWorker({ type: 'reset' });
-});
-aspectSelect.addEventListener('change', () => {
-  aspectMode = aspectSelect.value as AspectMode;
-  if (track) resizeProcessingSurface();
-});
-zoom.addEventListener('input', () => {
-  const value = Number(zoom.value);
-  zoomValue.value = `${value.toFixed(1)}×`;
-  scheduleZoom(value);
-});
-zoom.addEventListener('change', () => {
-  scheduleZoom(Number(zoom.value), true);
-});
-document.addEventListener('visibilitychange', () => {
-  paused = document.hidden;
-  if (paused) {
-    if (recording) stopRecording();
-    setStatus('In pausa');
-  } else if (running) {
-    meterStartedAt = performance.now();
-    frameCounter = 0;
     scheduleFrame();
-    setStatus('Live');
   }
-});
 
-window.addEventListener('beforeunload', () => {
-  stopCamera();
-  processingWorker.terminate();
-  if (zoomTimer !== null) window.clearTimeout(zoomTimer);
-  if (fpsTimer !== null) window.clearTimeout(fpsTimer);
-});
+  function scheduleFrame(): void {
+    if (!running) return;
+    if ('requestVideoFrameCallback' in video) {
+      callbackId = video.requestVideoFrameCallback((now) => tick(now));
+    } else {
+      callbackId = requestAnimationFrame(tick);
+    }
+  }
+
+  function stopLoop(): void {
+    running = false;
+    if ('cancelVideoFrameCallback' in video && callbackId) {
+      video.cancelVideoFrameCallback(callbackId);
+    } else if (callbackId) {
+      cancelAnimationFrame(callbackId);
+    }
+    callbackId = 0;
+  }
+
+  function stopCamera(): void {
+    stopLoop();
+    stream?.getTracks().forEach((item) => item.stop());
+    stream = null;
+    track = null;
+    video.srcObject = null;
+    workerBusy = false;
+    nextFrameDueAt = 0;
+    processingWorker.postMessage({ type: 'reset' } satisfies MainToWorkerMessage);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    sendOutputClear();
+    startBtn.textContent = 'Start camera';
+    setStatus('Stopped', 'off');
+  }
+
+  async function startCamera(deviceId = cameraSelect.value): Promise<void> {
+    setStatus('Opening camera…', 'ready');
+    startBtn.disabled = true;
+
+    try {
+      const nextStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          frameRate: { ideal: requestedFps },
+          resizeMode: 'none'
+        } as MediaTrackConstraints
+      });
+
+      const nextTrack = nextStream.getVideoTracks()[0] ?? null;
+      if (!nextTrack) throw new Error('Nessuna traccia video disponibile');
+
+      stopLoop();
+      stream?.getTracks().forEach((item) => item.stop());
+      stream = nextStream;
+      track = nextTrack;
+      video.srcObject = stream;
+      await video.play();
+
+      configureFpsControl();
+      await refreshCameras();
+      resizeProcessingSurface();
+      optionTimestamp = performance.now();
+      metricsStartedAt = performance.now();
+      processedFrames = 0;
+      skippedFrames = 0;
+      running = true;
+      scheduleFrame();
+
+      startBtn.textContent = 'Stop camera';
+      const actual = track.getSettings().frameRate;
+      cameraFpsText.textContent = actual ? `${actual.toFixed(1)} fps` : '—';
+      setStatus('LIVE', 'live');
+    } catch (error) {
+      console.error(error);
+      setStatus(error instanceof Error ? error.message : 'Camera non disponibile', 'error');
+    } finally {
+      startBtn.disabled = false;
+    }
+  }
+
+  async function applyCameraFps(): Promise<void> {
+    if (!track) return;
+    try {
+      await track.applyConstraints({
+        frameRate: { ideal: requestedFps, max: requestedFps }
+      });
+      const actual = track.getSettings().frameRate;
+      cameraFpsText.textContent = actual ? `${actual.toFixed(1)} fps` : '—';
+    } catch (error) {
+      console.warn('Il dispositivo non accetta il frame-rate richiesto', error);
+      cameraFpsText.textContent = 'constraint rejected';
+    }
+  }
+
+  processingWorker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
+    const message = event.data;
+
+    if (message.type === 'ready') {
+      workerReady = true;
+      if (!running) setStatus('Engine ready', 'ready');
+      return;
+    }
+
+    if (message.type === 'error') {
+      workerBusy = false;
+      console.error('Errore elaborazione:', message.message);
+      setStatus(`Engine error: ${message.message}`, 'error');
+      return;
+    }
+
+    workerBusy = false;
+    if (
+      message.generation !== surfaceGeneration ||
+      message.width !== canvas.width ||
+      message.height !== canvas.height
+    ) return;
+
+    processedFrames++;
+    processingEma = processingEma <= 0
+      ? message.processingMs
+      : processingEma * 0.85 + message.processingMs * 0.15;
+
+    if (previewEnabled.checked) {
+      const frame = new ImageData(
+        new Uint8ClampedArray(message.buffer),
+        message.width,
+        message.height
+      );
+      ctx.putImageData(frame, 0, 0);
+    }
+
+    if (outputWindow?.closed) {
+      outputWindow = null;
+      outputReady = false;
+      closeOutputBtn.disabled = true;
+    }
+
+    if (outputWindow && outputReady) {
+      try {
+        const outputMessage: OutputMessage = {
+          type: 'motion-frame',
+          buffer: message.buffer,
+          width: message.width,
+          height: message.height
+        };
+        outputWindow.postMessage(outputMessage, MESSAGE_ORIGIN, [message.buffer]);
+      } catch (error) {
+        console.warn('Output window non raggiungibile', error);
+        outputReady = false;
+      }
+    }
+  };
+
+  processingWorker.onerror = (event) => {
+    workerReady = false;
+    workerBusy = false;
+    console.error('Worker non disponibile:', event.message);
+    setStatus('Worker non disponibile', 'error');
+  };
+
+  function updateMetrics(): void {
+    const now = performance.now();
+    const elapsed = now - metricsStartedAt;
+    if (elapsed <= 0) return;
+
+    const measured = processedFrames * 1000 / elapsed;
+    const budget = 1000 / Math.max(1, requestedFps);
+    const load = processingEma > 0 ? processingEma / budget * 100 : 0;
+
+    actualFpsText.textContent = `${measured.toFixed(1)} fps`;
+    processingText.textContent = processingEma > 0
+      ? `${processingEma.toFixed(1)} ms · ${load.toFixed(0)}% budget`
+      : '—';
+    skippedText.textContent = String(skippedFrames);
+
+    processedFrames = 0;
+    skippedFrames = 0;
+    metricsStartedAt = now;
+  }
+
+  window.setInterval(updateMetrics, 1000);
+
+  window.addEventListener('message', (event) => {
+    if (MESSAGE_ORIGIN !== '*' && event.origin !== MESSAGE_ORIGIN) return;
+    if (event.source !== outputWindow) return;
+    if (event.data?.type === 'motion-output-ready') {
+      outputReady = true;
+      closeOutputBtn.disabled = false;
+      positionOutputWindow();
+    } else if (event.data?.type === 'motion-output-closed') {
+      outputWindow = null;
+      outputReady = false;
+      closeOutputBtn.disabled = true;
+    }
+  });
+
+  startBtn.addEventListener('click', () => {
+    if (running) stopCamera();
+    else void startCamera();
+  });
+
+  refreshCamerasBtn.addEventListener('click', () => void refreshCameras());
+  refreshDisplaysBtn.addEventListener('click', () => void refreshDisplays(true));
+  openOutputBtn.addEventListener('click', () => void openOutput());
+  closeOutputBtn.addEventListener('click', closeOutput);
+
+  cameraSelect.addEventListener('change', () => {
+    if (running) void startCamera(cameraSelect.value);
+  });
+
+  displaySelect.addEventListener('change', positionOutputWindow);
+
+  effectSelect.addEventListener('change', () => {
+    effectId = Number(effectSelect.value) as EffectId;
+    optionTimestamp = performance.now();
+    renderEffectControls();
+  });
+
+  aspectSelect.addEventListener('change', () => {
+    aspectMode = aspectSelect.value as AspectMode;
+    if (track) resizeProcessingSurface();
+  });
+
+  resolutionSelect.addEventListener('change', () => {
+    processingWidth = Number(resolutionSelect.value);
+    if (track) resizeProcessingSurface();
+  });
+
+  fps.addEventListener('input', () => {
+    requestedFps = Number(fps.value);
+    fpsValue.value = `${Math.round(requestedFps)} fps`;
+    nextFrameDueAt = 0;
+  });
+
+  fps.addEventListener('change', () => void applyCameraFps());
+
+  transition.addEventListener('input', () => {
+    transitionValue.value = `${Number(transition.value).toFixed(0)} ms`;
+  });
+
+  previewEnabled.addEventListener('change', () => {
+    if (!previewEnabled.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+
+  navigator.mediaDevices.addEventListener?.('devicechange', () => void refreshCameras());
+
+  void refreshCameras().catch(() => {
+    cameraSelect.replaceChildren(new Option('Grant camera permission first', ''));
+  });
+  void refreshDisplays(false);
+
+  transitionValue.value = `${Number(transition.value).toFixed(0)} ms`;
+  fpsValue.value = `${requestedFps} fps`;
+  closeOutputBtn.disabled = true;
+  setStatus('Loading engine…', 'ready');
+
+  window.addEventListener('beforeunload', () => {
+    stopCamera();
+    closeOutput();
+    processingWorker.terminate();
+  });
+}
+
+if (OUTPUT_MODE) initOutputWindow();
+else initController();
